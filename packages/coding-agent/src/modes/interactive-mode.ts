@@ -519,6 +519,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.onInputCallback = input => {
 			this.onInputCallback = undefined;
 			resolve(input);
+			if (this.loopModeEnabled && !this.loopPrompt) {
+				this.loopPrompt = input.text;
+			}
 		};
 		this.#scheduleLoopAutoSubmit();
 		return promise;

@@ -277,6 +277,13 @@ export class InputController {
 					} catch (err) {
 						this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
 					}
+					// When loop mode is active, resolve onInputCallback so the main
+					// loop can advance to the next iteration after the skill runs.
+					if (this.ctx.loopModeEnabled && this.ctx.onInputCallback) {
+						const cb = this.ctx.onInputCallback;
+						this.ctx.onInputCallback = undefined;
+						cb({ text, cancelled: false, started: false });
+					}
 					return;
 				}
 			}
