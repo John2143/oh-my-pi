@@ -461,6 +461,7 @@ export class AgentSession {
 	#planModeState: PlanModeState | undefined;
 	#planReferenceSent = false;
 	#planReferencePath = "local://PLAN.md";
+	#loopModeEnabled = false;
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -2774,6 +2775,15 @@ export class AgentSession {
 			this.#planReferenceSent = false;
 			this.#planReferencePath = state.planFilePath;
 		}
+	}
+
+	/** Whether loop mode is currently active (controls tool injection). */
+	isLoopModeEnabled(): boolean {
+		return this.#loopModeEnabled;
+	}
+
+	setLoopModeEnabled(enabled: boolean): void {
+		this.#loopModeEnabled = enabled;
 	}
 
 	markPlanReferenceSent(): void {

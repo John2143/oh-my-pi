@@ -11,7 +11,7 @@ import { getSymbolTheme, theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext, TodoPhase } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { calculatePromptTokens } from "../../session/compaction/compaction";
-import type { ExitPlanModeDetails } from "../../tools";
+import type { ExitLoopModeDetails, ExitPlanModeDetails, SleepLoopDetails } from "../../tools";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -490,6 +490,20 @@ export class EventController {
 			const details = event.result.details as ExitPlanModeDetails | undefined;
 			if (details) {
 				await this.ctx.handleExitPlanModeTool(details);
+			}
+		}
+		if (event.toolName === "exit_loop_mode" && !event.isError) {
+			const details = event.result.details as ExitLoopModeDetails | undefined;
+			await this.ctx.disableLoopMode(
+				details?.summary
+					? `Loop mode exited by agent. ${details.summary}`
+					: "Loop mode exited by agent. All work is complete.",
+			);
+		}
+		if (event.toolName === "sleep" && !event.isError) {
+			const details = event.result.details as SleepLoopDetails | undefined;
+			if (details) {
+				this.ctx.sleepLoop(details.durationMs, details.reason);
 			}
 		}
 	}

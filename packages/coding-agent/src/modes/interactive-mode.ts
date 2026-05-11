@@ -596,7 +596,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
 		if (!consumeLoopLimitIteration(this.loopLimit)) {
-			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
+			await this.disableLoopMode("Loop limit reached. Loop mode disabled.");
 			return;
 		}
 
@@ -607,7 +607,7 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!this.loopModeEnabled || !this.onInputCallback) return;
 		if (isLoopDurationExpired(this.loopLimit)) {
-			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
+			await this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
 			return;
 		}
 
@@ -627,8 +627,13 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
 	}
 
-	disableLoopMode(message = "Loop mode disabled."): void {
+	async disableLoopMode(message = "Loop mode disabled."): Promise<void> {
 		const wasEnabled = this.loopModeEnabled;
+		this.session.setLoopModeEnabled(false);
+		// Deactivate loop mode tools
+		const currentTools = this.session.getActiveToolNames();
+		const withoutLoopTools = currentTools.filter(name => name !== "exit_loop_mode" && name !== "sleep");
+		await this.session.setActiveToolsByName(withoutLoopTools);
 		this.loopModeEnabled = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
@@ -651,9 +656,29 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelLoopAutoSubmit();
 	}
 
+	/**
+	 * Sleep the loop for a specified duration. Cancels any pending auto-submit
+	 * and schedules the next iteration after `durationMs` milliseconds.
+	 * Used by the `sleep` tool to pause when no work exists temporarily.
+	 */
+	sleepLoop(durationMs: number, reason?: string): void {
+		if (!this.loopModeEnabled) return;
+		this.#cancelLoopAutoSubmit();
+		const prompt = this.loopPrompt;
+		if (!prompt) return;
+		const loopAction = settings.get("loop.mode");
+		const reasonSuffix = reason ? ` Reason: ${reason}` : "";
+		this.showStatus(`Loop sleeping for ${Math.round(durationMs / 1000)}s.${reasonSuffix}`);
+		this.#loopAutoSubmitTimer = setTimeout(() => {
+			this.#loopAutoSubmitTimer = undefined;
+			if (!this.loopModeEnabled || !this.onInputCallback) return;
+			void this.#runLoopIteration(loopAction, prompt);
+		}, durationMs);
+	}
+
 	async handleLoopCommand(args = ""): Promise<void> {
 		if (this.loopModeEnabled) {
-			this.disableLoopMode();
+			await this.disableLoopMode();
 			return;
 		}
 		const parsedLimit = parseLoopLimitArgs(args);
@@ -662,6 +687,17 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		this.loopModeEnabled = true;
+		this.session.setLoopModeEnabled(true);
+		// Activate loop mode tools (exit_loop_mode, sleep) which are always
+		// in the registry but filtered from the initial active set.
+		const currentTools = this.session.getActiveToolNames();
+		const nextTools = [...currentTools];
+		for (const name of ["exit_loop_mode", "sleep"]) {
+			if (!nextTools.includes(name) && this.session.getToolByName(name)) {
+				nextTools.push(name);
+			}
+		}
+		await this.session.setActiveToolsByName(nextTools);
 		this.loopPrompt = undefined;
 		this.loopLimit = createLoopLimitRuntime(parsedLimit);
 		this.statusLine.setLoopModeStatus({ enabled: true });

@@ -259,10 +259,12 @@ describe("createTools", () => {
 
 	it("HIDDEN_TOOLS contains review tools", () => {
 		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual([
+			"exit_loop_mode",
 			"exit_plan_mode",
 			"report_finding",
 			"report_tool_issue",
 			"resolve",
+			"sleep",
 			"yield",
 		]);
 	});

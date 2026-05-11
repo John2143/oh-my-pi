@@ -1007,6 +1007,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getModelString: () => (hasExplicitModel && model ? formatModelString(model) : undefined),
 			getActiveModelString,
 			getPlanModeState: () => session.getPlanModeState(),
+			isLoopModeEnabled: () => session?.isLoopModeEnabled() ?? false,
 			getCompactContext: () => session.formatCompactContext(),
 			getTodoPhases: () => session.getTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
@@ -1471,9 +1472,11 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
-		const requestedActiveToolNames = includeExitPlanMode
-			? normalizedRequested
-			: normalizedRequested.filter(name => name !== "exit_plan_mode");
+		const requestedActiveToolNames = (
+			includeExitPlanMode ? normalizedRequested : normalizedRequested.filter(name => name !== "exit_plan_mode")
+		)
+			// Loop mode tools live in the registry but activate mid-session via handleLoopCommand
+			.filter(name => name !== "exit_loop_mode" && name !== "sleep");
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));

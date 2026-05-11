@@ -30,6 +30,7 @@ import { CalculatorTool } from "./calculator";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
+import { ExitLoopModeTool } from "./exit-loop-mode";
 import { ExitPlanModeTool } from "./exit-plan-mode";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
@@ -48,6 +49,7 @@ import { ResolveTool } from "./resolve";
 import { reportFindingTool } from "./review";
 import { SearchTool } from "./search";
 import { SearchToolBm25Tool } from "./search-tool-bm25";
+import { SleepLoopTool } from "./sleep-loop";
 import { loadSshTool } from "./ssh";
 import { type TodoPhase, TodoWriteTool } from "./todo-write";
 import { WriteTool } from "./write";
@@ -71,6 +73,7 @@ export * from "./calculator";
 export * from "./checkpoint";
 export * from "./debug";
 export * from "./eval";
+export * from "./exit-loop-mode";
 export * from "./exit-plan-mode";
 export * from "./find";
 export * from "./gh";
@@ -89,6 +92,7 @@ export * from "./resolve";
 export * from "./review";
 export * from "./search";
 export * from "./search-tool-bm25";
+export * from "./sleep-loop";
 export * from "./ssh";
 export * from "./todo-write";
 export * from "./vim";
@@ -186,6 +190,8 @@ export interface ToolSession {
 	settings: Settings;
 	/** Plan mode state (if active) */
 	getPlanModeState?: () => PlanModeState | undefined;
+	/** Whether loop mode is currently active (controls injection of exit_loop_mode / sleep tools). */
+	isLoopModeEnabled?: () => boolean;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
 	/** Get cached todo phases for this session. */
@@ -298,8 +304,9 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	report_tool_issue: s => createReportToolIssueTool(s),
 	exit_plan_mode: s => new ExitPlanModeTool(s),
 	resolve: s => new ResolveTool(s),
+	exit_loop_mode: s => new ExitLoopModeTool(s),
+	sleep: s => new SleepLoopTool(s),
 };
-
 export type ToolName = keyof typeof BUILTIN_TOOLS;
 
 export interface EvalBackendsAllowance {
@@ -349,6 +356,11 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const planEnabled = session.settings.get("plan.enabled");
 	if (planEnabled && requestedTools && !requestedTools.includes("exit_plan_mode")) {
 		requestedTools.push("exit_plan_mode");
+	}
+	if (requestedTools) {
+		for (const name of ["exit_loop_mode", "sleep"]) {
+			if (!requestedTools.includes(name)) requestedTools.push(name);
+		}
 	}
 	const backends = resolveEvalBackends(session);
 	const allowPython = backends.python;
@@ -466,6 +478,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 						.map(([name, factory]) => [name, factory] as const),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
 					...(planEnabled ? ([["exit_plan_mode", HIDDEN_TOOLS.exit_plan_mode]] as const) : []),
+					...([
+						["exit_loop_mode", HIDDEN_TOOLS.exit_loop_mode],
+						["sleep", HIDDEN_TOOLS.sleep],
+					] as const),
 				];
 
 	const baseResults = await Promise.all(
