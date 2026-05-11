@@ -43,6 +43,7 @@ import { renameApprovedPlanFile } from "../plan-mode/approved-plan";
 import planModeApprovedPrompt from "../prompts/system/plan-mode-approved.md" with { type: "text" };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
+import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import { STTController, type SttState } from "../stt";
@@ -514,6 +515,52 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setSlashCommands(fileCommands);
 	}
 
+	/**
+	 * Handle skill commands (/skill:name [args]).
+	 * Loads the SKILL.md, strips YAML frontmatter, and sends as a custom message.
+	 * Returns true if handled, false if not a skill command or skill not found.
+	 */
+	async handleSkillCommand(text: string): Promise<boolean> {
+		if (!text.startsWith("/skill:")) return false;
+
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const skillPath = this.skillCommands.get(commandName);
+		if (!skillPath) return false;
+
+		try {
+			const content = await Bun.file(skillPath).text();
+			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+			const metaLines = [`Skill: ${skillPath}`];
+			if (args) {
+				metaLines.push(`User: ${args}`);
+			}
+			const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
+			const skillName = commandName.slice("skill:".length);
+			const details: SkillPromptDetails = {
+				name: skillName || commandName,
+				path: skillPath,
+				args: args || undefined,
+				lineCount: body ? body.split("\n").length : 0,
+			};
+			await this.session.promptCustomMessage(
+				{
+					customType: SKILL_PROMPT_MESSAGE_TYPE,
+					content: message,
+					display: true,
+					details,
+					attribution: "user",
+				},
+				{ streamingBehavior: "followUp" },
+			);
+			return true;
+		} catch (err) {
+			this.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
+			return false;
+		}
+	}
+
 	async getUserInput(): Promise<SubmittedUserInput> {
 		const { promise, resolve } = Promise.withResolvers<SubmittedUserInput>();
 		this.onInputCallback = input => {
@@ -563,6 +610,20 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
 			return;
 		}
+
+		// Handle skill commands by loading the skill content
+		if (prompt.startsWith("/skill:")) {
+			const handled = await this.handleSkillCommand(prompt);
+			if (handled) {
+				if (this.onInputCallback) {
+					const cb = this.onInputCallback;
+					this.onInputCallback = undefined;
+					cb({ text: prompt, cancelled: false, started: false });
+				}
+				return;
+			}
+		}
+
 		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
 	}
 

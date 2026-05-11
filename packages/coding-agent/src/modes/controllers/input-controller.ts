@@ -8,7 +8,6 @@ import { createPromptActionAutocompleteProvider } from "../../modes/prompt-actio
 import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
@@ -242,43 +241,10 @@ export class InputController {
 
 			// Handle skill commands (/skill:name [args])
 			if (text.startsWith("/skill:")) {
-				const spaceIndex = text.indexOf(" ");
-				const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
-				const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
-				const skillPath = this.ctx.skillCommands?.get(commandName);
-				if (skillPath) {
+				const handled = await this.ctx.handleSkillCommand(text);
+				if (handled) {
 					this.ctx.editor.addToHistory(text);
 					this.ctx.editor.setText("");
-					try {
-						const content = await Bun.file(skillPath).text();
-						const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
-						const metaLines = [`Skill: ${skillPath}`];
-						if (args) {
-							metaLines.push(`User: ${args}`);
-						}
-						const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
-						const skillName = commandName.slice("skill:".length);
-						const details: SkillPromptDetails = {
-							name: skillName || commandName,
-							path: skillPath,
-							args: args || undefined,
-							lineCount: body ? body.split("\n").length : 0,
-						};
-						await this.ctx.session.promptCustomMessage(
-							{
-								customType: SKILL_PROMPT_MESSAGE_TYPE,
-								content: message,
-								display: true,
-								details,
-								attribution: "user",
-							},
-							{ streamingBehavior: "followUp" },
-						);
-					} catch (err) {
-						this.ctx.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
-					}
-					// When loop mode is active, resolve onInputCallback so the main
-					// loop can advance to the next iteration after the skill runs.
 					if (this.ctx.loopModeEnabled && this.ctx.onInputCallback) {
 						const cb = this.ctx.onInputCallback;
 						this.ctx.onInputCallback = undefined;
