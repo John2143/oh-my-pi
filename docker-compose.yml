@@ -28,5 +28,12 @@ services:
       # Provider config (proxy endpoints + stub api keys). Credentials stay on
       # the host; only the routing config is exposed to the container.
       - ${HOME}/.omp/agent/models.yml:/root/.omp/agent/models.yml:ro
+      # Personal omp agent config from the host: the global AGENTS.md context
+      # file and the rules library. The loader (`packages/coding-agent/src/
+      # discovery/agents.ts`) walks `~/.agent/{AGENTS.md,rules,…}`, so we mount
+      # the host's `AGENT.md` (singular) onto the container path `AGENTS.md`
+      # (plural) to match the expected name without renaming on the host.
+      - ${HOME}/.agent/AGENT.md:/root/.agent/AGENTS.md:ro
+      - ${HOME}/.agent/rules:/root/.agent/rules:ro
     ports:
       - "8080:8080"
