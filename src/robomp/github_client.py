@@ -63,6 +63,8 @@ class PullRequestInfo:
     head_ref: str
     base_ref: str
     state: str
+    author: str = ""
+    head_repo: str = ""
 
 
 @dataclass(slots=True, frozen=True)
@@ -196,6 +198,10 @@ class GitHubClient:
         data = await self.request("GET", f"/repos/{repo}/issues/{number}")
         return _issue_from_payload(repo, data)
 
+    async def get_pull_request(self, repo: str, number: int) -> PullRequestInfo:
+        data = await self.request("GET", f"/repos/{repo}/pulls/{number}")
+        return _pr_from_payload(repo, data)
+
     async def list_issues(
         self,
         repo: str,
@@ -325,14 +331,7 @@ class GitHubClient:
                 "maintainer_can_modify": maintainer_can_modify,
             },
         )
-        return PullRequestInfo(
-            repo=repo,
-            number=int(data["number"]),
-            html_url=str(data["html_url"]),
-            head_ref=str(data["head"]["ref"]),
-            base_ref=str(data["base"]["ref"]),
-            state=str(data["state"]),
-        )
+        return _pr_from_payload(repo, data)
 
     async def request_reviewers(
         self,
@@ -406,6 +405,23 @@ def _issue_from_payload(repo: str, data: Mapping[str, Any]) -> IssueInfo:
         author=str(user.get("login") or ""),
         labels=labels,
         is_pull_request="pull_request" in data,
+    )
+
+
+def _pr_from_payload(repo: str, data: Mapping[str, Any]) -> PullRequestInfo:
+    head = data.get("head") or {}
+    base = data.get("base") or {}
+    user = data.get("user") or {}
+    head_repo = head.get("repo") if isinstance(head, Mapping) else None
+    return PullRequestInfo(
+        repo=repo,
+        number=int(data["number"]),
+        html_url=str(data["html_url"]),
+        head_ref=str(head.get("ref") or "") if isinstance(head, Mapping) else "",
+        base_ref=str(base.get("ref") or "") if isinstance(base, Mapping) else "",
+        state=str(data.get("state") or "open"),
+        author=str(user.get("login") or "") if isinstance(user, Mapping) else "",
+        head_repo=str(head_repo.get("full_name") or "") if isinstance(head_repo, Mapping) else "",
     )
 
 

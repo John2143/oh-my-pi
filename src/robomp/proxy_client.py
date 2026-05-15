@@ -159,6 +159,10 @@ class GitHubProxyClient:
         data = await self._request("GET", "/gh/v1/issue", params={"repo": repo, "number": number})
         return _issue_from(data)
 
+    async def get_pull_request(self, repo: str, number: int) -> PullRequestInfo:
+        data = await self._request("GET", "/gh/v1/pull_request", params={"repo": repo, "number": number})
+        return _pr_from(data)
+
     async def list_issues(
         self,
         repo: str,
@@ -450,6 +454,8 @@ def _pr_from(data: Any) -> PullRequestInfo:
         head_ref=str(data.get("head_ref") or ""),
         base_ref=str(data.get("base_ref") or ""),
         state=str(data.get("state") or "open"),
+        author=str(data.get("author") or ""),
+        head_repo=str(data.get("head_repo") or ""),
     )
 
 

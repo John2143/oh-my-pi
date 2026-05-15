@@ -87,6 +87,28 @@ def test_redirect_target_succeeds_when_followable() -> None:
     assert repo.full_name == "new/repo"
 
 
+def test_get_pull_request_parses_head_repo_and_author() -> None:
+    def handler(request: httpx.Request) -> httpx.Response:
+        assert request.url.path == "/repos/octo/widget/pulls/9"
+        return httpx.Response(
+            200,
+            json={
+                "number": 9,
+                "html_url": "https://github.com/octo/widget/pull/9",
+                "head": {"ref": "farm/abc12345/fix", "repo": {"full_name": "octo/widget"}},
+                "base": {"ref": "main"},
+                "state": "open",
+                "user": {"login": "robomp-bot"},
+            },
+        )
+
+    client = GitHubClient("tok", transport=httpx.MockTransport(handler))
+    pr = _run_async(client.get_pull_request("octo/widget", 9))
+    assert pr.head_ref == "farm/abc12345/fix"
+    assert pr.head_repo == "octo/widget"
+    assert pr.author == "robomp-bot"
+
+
 def test_204_no_content_returns_none() -> None:
     transport = httpx.MockTransport(lambda r: httpx.Response(204))
     client = GitHubClient("tok", transport=transport)

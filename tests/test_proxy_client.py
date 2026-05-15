@@ -290,6 +290,18 @@ def round_trip_app(proxy_settings: Settings):
             )
         if path == "/user":
             return httpx.Response(200, json={"login": "robomp-bot"})
+        if path == "/repos/octo/widget/pulls/4" and req.method == "GET":
+            return httpx.Response(
+                200,
+                json={
+                    "number": 4,
+                    "html_url": "https://example/4",
+                    "head": {"ref": "feat", "repo": {"full_name": "octo/widget"}},
+                    "base": {"ref": "main"},
+                    "state": "open",
+                    "user": {"login": "robomp-bot"},
+                },
+            )
         if path == "/repos/octo/widget/pulls" and req.method == "POST":
             return httpx.Response(
                 201,
@@ -341,6 +353,11 @@ async def test_round_trip_all_endpoints(round_trip_app) -> None:
     assert len(prs) == 1 and isinstance(prs[0], PullRequestReviewInfo)
 
     assert await client.get_authenticated_login() == "robomp-bot"
+
+    existing_pr = await client.get_pull_request("octo/widget", 4)
+    assert isinstance(existing_pr, PullRequestInfo)
+    assert existing_pr.head_ref == "feat"
+    assert existing_pr.author == "robomp-bot"
 
     posted = await client.post_comment("octo/widget", 1, "hi")
     assert isinstance(posted, CommentInfo)

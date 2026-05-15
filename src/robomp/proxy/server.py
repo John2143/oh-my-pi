@@ -312,6 +312,16 @@ def create_proxy_app(settings: Settings) -> FastAPI:
             return _gh_error_response(exc)
         return JSONResponse(_serialize(info))
 
+    @app.get("/gh/v1/pull_request")
+    async def get_pull_request(request: Request, repo: str, number: int) -> JSONResponse:
+        await _authenticate(request)
+        github: GitHubClient = request.app.state.github
+        try:
+            info = await github.get_pull_request(repo, number)
+        except GitHubError as exc:
+            return _gh_error_response(exc)
+        return JSONResponse(_serialize(info))
+
     @app.get("/gh/v1/issues")
     async def list_issues(request: Request, repo: str, state: str = "open", limit: int = 30) -> JSONResponse:
         await _authenticate(request)
