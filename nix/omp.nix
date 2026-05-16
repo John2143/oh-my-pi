@@ -3,6 +3,7 @@
   stdenv,
   bun2nix,
   bun,
+  fetchurl,
   rustc,
   cargo,
   rustPlatform,
@@ -18,6 +19,25 @@
 let
   versionData = builtins.fromJSON (builtins.readFile ../hashes.json);
   inherit (versionData) version cargoHash;
+
+  # nixpkgs currently ships bun 1.3.13; the source requires >= 1.3.14. The
+  # bun-compiled binary embeds whatever bun runtime built it, so the runtime
+  # version check rejects nixpkgs's bun. Override to the 1.3.14 release
+  # tarball directly. nixpkgs bun is a precompiled binary unpack, so a src
+  # swap is sufficient — no toolchain rebuild. Linux-x64 only for now;
+  # other platforms fall through to nixpkgs bun (and will fail the runtime
+  # check until their hashes are added).
+  bunPinned =
+    if stdenv.hostPlatform.system == "x86_64-linux" then
+      bun.overrideAttrs (_old: {
+        version = "1.3.14";
+        src = fetchurl {
+          url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip";
+          hash = "sha256-lR7iruhV8IWVruxiJSJqKY0/6oOj3NZGXAnLzN9+hI8=";
+        };
+      })
+    else
+      bun;
   platformsBySystem = {
     aarch64-darwin = {
       bunTarget = "bun-darwin-arm64";
@@ -68,7 +88,7 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = [
     bun2nix.hook
-    bun
+    bunPinned
     rustc
     cargo
     rustPlatform.cargoSetupHook
