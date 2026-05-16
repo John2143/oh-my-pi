@@ -69,3 +69,8 @@ python/robomp/.cache/
 python/robomp/src/robomp/static/
 python/robomp/web/dist/
 python/robomp/.env
+
+# Nix build outputs
+result
+result-*
+.direnv/
