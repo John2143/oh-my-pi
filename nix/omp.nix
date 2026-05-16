@@ -196,16 +196,17 @@ stdenv.mkDerivation {
     # Generate runtime enum exports from const enums in the type definitions
     if [ -f packages/natives/scripts/gen-enums.ts ] && \
        [ -f packages/natives/native/index.d.ts ]; then
-      bun packages/natives/scripts/gen-enums.ts || true
+      ${bunPinned}/bin/bun packages/natives/scripts/gen-enums.ts || true
     fi
 
     # Generate the docs index (prepack script in coding-agent)
     echo "Generating docs index..."
-    bun packages/coding-agent/scripts/generate-docs-index.ts
+    ${bunPinned}/bin/bun packages/coding-agent/scripts/generate-docs-index.ts
 
-    # Compile the standalone binary
+    # Compile the standalone binary. bun2nix.hook drags bun 1.3.13 onto PATH;
+    # use the pinned binary via absolute path so the embedded runtime is 1.3.14.
     echo "Compiling standalone binary..."
-    bun build --compile \
+    ${bunPinned}/bin/bun build --compile \
       --define PI_COMPILED=true \
       --external mupdf \
       --target="${platform.bunTarget}" \
