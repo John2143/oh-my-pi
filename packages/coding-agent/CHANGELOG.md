@@ -57,6 +57,7 @@
 
 - Fixed `.env` loading so malformed variable names and NUL-containing values are ignored before they can poison `Bun.env` and break bash/external process execution with `nul byte found in provided data`.
 
+- Fixed `SKILL_PROMPT_MESSAGE_TYPE is not defined` error when invoking skills via the TUI keyboard path (`/skill:`) due to a missing import in `input-controller.ts`.
 ## [15.1.2] - 2026-05-15
 ### Fixed
 
