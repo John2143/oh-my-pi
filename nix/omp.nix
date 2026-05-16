@@ -105,9 +105,18 @@ stdenv.mkDerivation {
 
   # smallvec's `specialization` feature requires nightly Rust.
   # RUSTC_BOOTSTRAP=1 enables nightly features on stable rustc.
+  #
+  # CFLAGS forces -O2 for cc-rs C compiles (tree-sitter-* crates' build.rs
+  # invokes gcc on huge generated parser.c files). gcc 15 occasionally emits
+  # malformed assembly at -O3 on these (~5MB parser.c) — manifests as the
+  # assembler rejecting "unknown pseudo-op: .jero" (single-bit-flipped .zero).
+  # gcc takes the last -O flag, so a trailing -O2 overrides cc-rs's -O3 and
+  # dodges the optimizer path that trips this. Only affects C — Rust code
+  # still builds at the cargo profile's release -O level.
   env = {
     RUSTC_BOOTSTRAP = 1;
     ${rustTargetEnv} = glimmerRustFlags;
+    CFLAGS = "-O2";
   };
 
   bunDeps = bun2nix.fetchBunDeps {
