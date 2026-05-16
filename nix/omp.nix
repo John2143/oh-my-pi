@@ -3,7 +3,6 @@
   stdenv,
   bun2nix,
   bun,
-  fetchurl,
   rustc,
   cargo,
   rustPlatform,
@@ -19,25 +18,6 @@
 let
   versionData = builtins.fromJSON (builtins.readFile ../hashes.json);
   inherit (versionData) version cargoHash;
-
-  # nixpkgs currently ships bun 1.3.13; the source requires >= 1.3.14. The
-  # bun-compiled binary embeds whatever bun runtime built it, so the runtime
-  # version check rejects nixpkgs's bun. Override to the 1.3.14 release
-  # tarball directly. nixpkgs bun is a precompiled binary unpack, so a src
-  # swap is sufficient — no toolchain rebuild. Linux-x64 only for now;
-  # other platforms fall through to nixpkgs bun (and will fail the runtime
-  # check until their hashes are added).
-  bunPinned =
-    if stdenv.hostPlatform.system == "x86_64-linux" then
-      bun.overrideAttrs (_old: {
-        version = "1.3.14";
-        src = fetchurl {
-          url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/bun-linux-x64.zip";
-          hash = "sha256-lR7iruhV8IWVruxiJSJqKY0/6oOj3NZGXAnLzN9+hI8=";
-        };
-      })
-    else
-      bun;
   platformsBySystem = {
     aarch64-darwin = {
       bunTarget = "bun-darwin-arm64";
@@ -88,7 +68,7 @@ stdenv.mkDerivation {
 
   nativeBuildInputs = [
     bun2nix.hook
-    bunPinned
+    bun
     rustc
     cargo
     rustPlatform.cargoSetupHook
@@ -156,6 +136,18 @@ stdenv.mkDerivation {
     cat > packages/stats/src/embedded-client.generated.txt <<'PLACEHOLDER'
     export const EMBEDDED_CLIENT_ARCHIVE_TAR_GZ_BASE64 = "";
     PLACEHOLDER
+
+    # `bun build --compile` embeds the compiling bun's runtime, so the
+    # binary's Bun.version == nixpkgs bun's version (1.3.13 at time of
+    # writing). The source enforces engines.bun >= 1.3.14 at startup,
+    # which always rejects the embedded runtime. Overriding bun to 1.3.14
+    # was attempted but bun 1.3.14's `--compile` output segfaults in
+    # dl_main on glibc 2.42 (verified with a 2-line test script). So
+    # patch engines.bun down to match the compiling bun's version —
+    # MIN_BUN_VERSION is derived from this field at build time. When
+    # nixpkgs bumps bun past 1.3.14, this sed becomes a no-op and the
+    # source's original floor takes over.
+    sed -i 's|"bun": ">=[0-9.]*"|"bun": ">=${lib.getVersion bun}"|' packages/utils/package.json
   '';
 
   buildPhase = ''
@@ -196,17 +188,17 @@ stdenv.mkDerivation {
     # Generate runtime enum exports from const enums in the type definitions
     if [ -f packages/natives/scripts/gen-enums.ts ] && \
        [ -f packages/natives/native/index.d.ts ]; then
-      ${bunPinned}/bin/bun packages/natives/scripts/gen-enums.ts || true
+      ${bun}/bin/bun packages/natives/scripts/gen-enums.ts || true
     fi
 
     # Generate the docs index (prepack script in coding-agent)
     echo "Generating docs index..."
-    ${bunPinned}/bin/bun packages/coding-agent/scripts/generate-docs-index.ts
+    ${bun}/bin/bun packages/coding-agent/scripts/generate-docs-index.ts
 
     # Compile the standalone binary. bun2nix.hook drags bun 1.3.13 onto PATH;
     # use the pinned binary via absolute path so the embedded runtime is 1.3.14.
     echo "Compiling standalone binary..."
-    ${bunPinned}/bin/bun build --compile \
+    ${bun}/bin/bun build --compile \
       --define PI_COMPILED=true \
       --external mupdf \
       --target="${platform.bunTarget}" \
