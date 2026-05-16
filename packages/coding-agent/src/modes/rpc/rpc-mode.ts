@@ -348,6 +348,10 @@ export async function runRpcMode(
 			// Custom header not supported in RPC mode - requires TUI access
 		}
 
+		registerStatusLineSegment(_id: string, _segment: unknown): void {
+			// Status line segments not supported in RPC mode - requires TUI access
+		}
+
 		setTitle(title: string): void {
 			// Title updates are low-value noise for most RPC hosts; opt in via PI_RPC_EMIT_TITLE=1.
 			if (!emitRpcTitles) return;

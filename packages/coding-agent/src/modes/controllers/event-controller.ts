@@ -18,6 +18,7 @@ import type { PlanApprovalDetails } from "../../plan-mode/approved-plan";
 import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readPendingDisplayTag } from "../../session/messages";
 import type { ResolveToolDetails } from "../../tools/resolve";
+import type { ExitLoopModeDetails, ExitPlanModeDetails } from "../../tools";
 
 type AgentSessionEventKind = AgentSessionEvent["type"];
 
@@ -556,6 +557,14 @@ export class EventController {
 					await this.ctx.handlePlanApproval(planDetails);
 				}
 			}
+		}
+		if (event.toolName === "exit_loop_mode" && !event.isError) {
+			const details = event.result.details as ExitLoopModeDetails | undefined;
+			await this.ctx.disableLoopMode(
+				details?.summary
+					? `Loop mode exited by agent. ${details.summary}`
+					: "Loop mode exited by agent. All work is complete.",
+			);
 		}
 	}
 

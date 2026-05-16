@@ -53,6 +53,7 @@ import planModeCompactInstructionsPrompt from "../prompts/system/plan-mode-compa
 };
 import type { AgentSession, AgentSessionEvent } from "../session/agent-session";
 import { HistoryStorage } from "../session/history-storage";
+import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { SessionContext, SessionManager } from "../session/session-manager";
 import { getRecentSessions } from "../session/session-manager";
 import { formatDuration } from "../slash-commands/helpers/format";
@@ -565,6 +566,52 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.session.setSlashCommands(fileCommands);
 	}
 
+	/**
+	 * Handle skill commands (/skill:name [args]).
+	 * Loads the SKILL.md, strips YAML frontmatter, and sends as a custom message.
+	 * Returns true if handled, false if not a skill command or skill not found.
+	 */
+	async handleSkillCommand(text: string): Promise<boolean> {
+		if (!text.startsWith("/skill:")) return false;
+
+		const spaceIndex = text.indexOf(" ");
+		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
+		const args = spaceIndex === -1 ? "" : text.slice(spaceIndex + 1).trim();
+		const skillPath = this.skillCommands.get(commandName);
+		if (!skillPath) return false;
+
+		try {
+			const content = await Bun.file(skillPath).text();
+			const body = content.replace(/^---\n[\s\S]*?\n---\n/, "").trim();
+			const metaLines = [`Skill: ${skillPath}`];
+			if (args) {
+				metaLines.push(`User: ${args}`);
+			}
+			const message = `${body}\n\n---\n\n${metaLines.join("\n")}`;
+			const skillName = commandName.slice("skill:".length);
+			const details: SkillPromptDetails = {
+				name: skillName || commandName,
+				path: skillPath,
+				args: args || undefined,
+				lineCount: body ? body.split("\n").length : 0,
+			};
+			await this.session.promptCustomMessage(
+				{
+					customType: SKILL_PROMPT_MESSAGE_TYPE,
+					content: message,
+					display: true,
+					details,
+					attribution: "user",
+				},
+				{ streamingBehavior: "followUp" },
+			);
+			return true;
+		} catch (err) {
+			this.showError(`Failed to load skill: ${err instanceof Error ? err.message : String(err)}`);
+			return false;
+		}
+	}
+
 	async getUserInput(): Promise<SubmittedUserInput> {
 		if (this.session.getGoalModeState()?.mode === "exiting") {
 			await this.#exitGoalMode({ reason: "completed", silent: true });
@@ -573,6 +620,9 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.onInputCallback = input => {
 			this.onInputCallback = undefined;
 			resolve(input);
+			if (this.loopModeEnabled && !this.loopPrompt) {
+				this.loopPrompt = input.text;
+			}
 		};
 		this.#scheduleLoopAutoSubmit();
 		this.#scheduleGoalContinuation();
@@ -643,7 +693,7 @@ export class InteractiveMode implements InteractiveModeContext {
 
 	async #runLoopIteration(action: "prompt" | "compact" | "reset", prompt: string): Promise<void> {
 		if (!consumeLoopLimitIteration(this.loopLimit)) {
-			this.disableLoopMode("Loop limit reached. Loop mode disabled.");
+			await this.disableLoopMode("Loop limit reached. Loop mode disabled.");
 			return;
 		}
 
@@ -654,14 +704,33 @@ export class InteractiveMode implements InteractiveModeContext {
 		}
 		if (!this.loopModeEnabled || !this.onInputCallback) return;
 		if (isLoopDurationExpired(this.loopLimit)) {
-			this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
+			await this.disableLoopMode("Loop time limit reached. Loop mode disabled.");
 			return;
 		}
+
+		// Handle skill commands by loading the skill content
+		if (prompt.startsWith("/skill:")) {
+			const handled = await this.handleSkillCommand(prompt);
+			if (handled) {
+				if (this.onInputCallback) {
+					const cb = this.onInputCallback;
+					this.onInputCallback = undefined;
+					cb({ text: prompt, cancelled: false, started: false });
+				}
+				return;
+			}
+		}
+
 		this.onInputCallback(this.startPendingSubmission({ text: prompt }));
 	}
 
-	disableLoopMode(message = "Loop mode disabled."): void {
+	async disableLoopMode(message = "Loop mode disabled."): Promise<void> {
 		const wasEnabled = this.loopModeEnabled;
+		this.session.setLoopModeEnabled(false);
+		// Deactivate loop mode tools
+		const currentTools = this.session.getActiveToolNames();
+		const withoutLoopTools = currentTools.filter(name => name !== "exit_loop_mode");
+		await this.session.setActiveToolsByName(withoutLoopTools);
 		this.loopModeEnabled = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
@@ -684,9 +753,10 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#cancelLoopAutoSubmit();
 	}
 
+
 	async handleLoopCommand(args = ""): Promise<void> {
 		if (this.loopModeEnabled) {
-			this.disableLoopMode();
+			await this.disableLoopMode();
 			return;
 		}
 		const parsedLimit = parseLoopLimitArgs(args);
@@ -695,6 +765,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 		this.loopModeEnabled = true;
+		this.session.setLoopModeEnabled(true);
+		// Activate loop mode tool (exit_loop_mode) which is always in the
+		// registry but filtered from the initial active set.
+		const currentTools = this.session.getActiveToolNames();
+		const nextTools = [...currentTools];
+		if (!nextTools.includes("exit_loop_mode") && this.session.getToolByName("exit_loop_mode")) {
+			nextTools.push("exit_loop_mode");
+		}
+		await this.session.setActiveToolsByName(nextTools);
 		this.loopPrompt = undefined;
 		this.loopLimit = createLoopLimitRuntime(parsedLimit);
 		this.statusLine.setLoopModeStatus({ enabled: true });

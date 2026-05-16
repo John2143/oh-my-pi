@@ -17,7 +17,7 @@ import {
 	type PrCacheContext,
 } from "./status-line/git-utils";
 import { getPreset } from "./status-line/presets";
-import { renderSegment, type SegmentContext } from "./status-line/segments";
+import { renderSegment, SEGMENTS, type SegmentContext } from "./status-line/segments";
 import { getSeparator } from "./status-line/separators";
 import { calculateTokensPerSecond } from "./status-line/token-rate";
 
@@ -54,6 +54,7 @@ export class StatusLineComponent implements Component {
 	#onBranchChange: (() => void) | null = null;
 	#autoCompactEnabled: boolean = true;
 	#hookStatuses: Map<string, string> = new Map();
+	#extensionSegments: Map<string, { render(ctx: SegmentContext): { content: string; visible: boolean } }> = new Map();
 	#subagentCount: number = 0;
 	#sessionStartTime: number = Date.now();
 	#planModeStatus: { enabled: boolean; paused: boolean } | null = null;
@@ -123,6 +124,10 @@ export class StatusLineComponent implements Component {
 		} else {
 			this.#hookStatuses.set(key, text);
 		}
+	}
+
+	registerSegment(id: string, segment: { render(ctx: SegmentContext): { content: string; visible: boolean } }): void {
+		this.#extensionSegments.set(id, segment);
 	}
 
 	watchBranch(onBranchChange: () => void): void {
@@ -420,6 +425,14 @@ export class StatusLineComponent implements Component {
 			if (rendered.visible && rendered.content) {
 				leftParts.push(rendered.content);
 				leftSegIds.push(segId);
+			}
+		}
+
+		// Extension-registered segments (always rendered on the left)
+		for (const [id, segment] of this.#extensionSegments) {
+			const rendered = segment.render(ctx);
+			if (rendered.visible && rendered.content) {
+				leftParts.push(rendered.content);
 			}
 		}
 

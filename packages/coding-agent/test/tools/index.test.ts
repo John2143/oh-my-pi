@@ -287,8 +287,9 @@ describe("createTools", () => {
 		expect(names).toContain("search_tool_bm25");
 	});
 
-	it("HIDDEN_TOOLS contains review tools and goal", () => {
+	it("HIDDEN_TOOLS contains review tools, goal, and exit_loop_mode", () => {
 		expect(Object.keys(HIDDEN_TOOLS).sort()).toEqual([
+			"exit_loop_mode",
 			"goal",
 			"report_finding",
 			"report_tool_issue",

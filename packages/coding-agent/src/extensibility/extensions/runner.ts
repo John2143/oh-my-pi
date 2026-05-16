@@ -152,6 +152,7 @@ const noOpUIContext: ExtensionUIContext = {
 	setWidget: () => {},
 	setFooter: () => {},
 	setHeader: () => {},
+	registerStatusLineSegment: () => {},
 	setTitle: () => {},
 	custom: async () => undefined as never,
 	setEditorText: () => {},

@@ -67,6 +67,7 @@ export class ExtensionUiController {
 				// Theme object passed directly - not supported in current implementation
 				return Promise.resolve({ success: false, error: "Direct theme object not supported" });
 			},
+			registerStatusLineSegment: (id, segment) => this.ctx.statusLine.registerSegment(id, segment),
 			setFooter: () => {},
 			setHeader: () => {},
 			setEditorComponent: factory => this.ctx.setEditorComponent(factory),
@@ -505,6 +506,7 @@ export class ExtensionUiController {
 			setTheme: () => Promise.resolve({ success: false, error: "Background mode" }),
 			setFooter: () => {},
 			setHeader: () => {},
+			registerStatusLineSegment: () => {},
 			setEditorComponent: () => {},
 			getToolsExpanded: () => false,
 			setToolsExpanded: () => {},

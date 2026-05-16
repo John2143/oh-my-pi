@@ -1104,6 +1104,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			getGoalModeState: () => session?.getGoalModeState(),
 			getGoalRuntime: () => session?.goalRuntime,
 			getClientBridge: () => session?.clientBridge,
+			isLoopModeEnabled: () => session?.isLoopModeEnabled() ?? false,
 			getCompactContext: () => session.formatCompactContext(),
 			getTodoPhases: () => session.getTodoPhases(),
 			setTodoPhases: phases => session.setTodoPhases(phases),
@@ -1477,6 +1478,20 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 			return (extensionRunner ? new ExtensionToolWrapper(wrapped, extensionRunner) : wrapped) as AgentTool;
 		};
 
+		// Always register loop mode tools in the registry for mid-session activation.
+		// They are filtered from the initial active set and only activated via
+		// handleLoopCommand -> setActiveToolsByName.
+		if (!toolRegistry.has("exit_loop_mode")) {
+			const exitLoopTool = await logger.time(
+				"createTools:exit_loop_mode:session",
+				HIDDEN_TOOLS.exit_loop_mode,
+				toolSession,
+			);
+			if (exitLoopTool) {
+				toolRegistry.set(exitLoopTool.name, wrapToolWithMetaNotice(exitLoopTool));
+			}
+		}
+
 		let cursorEventEmitter: ((event: AgentEvent) => void) | undefined;
 		const cursorExecHandlers = new CursorExecHandlers({
 			cwd,
@@ -1594,7 +1609,9 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
-		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
+		const requestedActiveToolNames = normalizedRequested
+			// Loop mode tools live in the registry but activate mid-session via handleLoopCommand
+			.filter(name => name !== "goal" && name !== "exit_loop_mode");
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));

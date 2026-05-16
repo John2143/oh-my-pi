@@ -159,6 +159,9 @@ export interface ExtensionUIContext {
 	/** Set a widget to display above or below the editor. Accepts string array or component factory. */
 	setWidget(key: string, content: ExtensionWidgetContent, options?: ExtensionWidgetOptions): void;
 
+
+	/** Register a custom segment in the status line (footer). Extension segments render on the left side. */
+	registerStatusLineSegment(id: string, segment: { render(ctx: unknown): { content: string; visible: boolean } }): void;
 	/** Set a custom footer component, or undefined to restore the built-in footer. */
 	setFooter(factory: ExtensionUiComponentFactory | undefined): void;
 

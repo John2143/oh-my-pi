@@ -344,6 +344,7 @@ export function createAcpExtensionUiContext(
 		setWidget: () => {},
 		setFooter: () => {},
 		setHeader: () => {},
+		registerStatusLineSegment: () => {},
 		setTitle: () => {},
 		custom: async () => undefined as never,
 		pasteToEditor: () => {},

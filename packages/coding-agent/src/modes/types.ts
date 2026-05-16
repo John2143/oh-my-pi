@@ -230,6 +230,7 @@ export interface InteractiveModeContext {
 	): Promise<CompactionOutcome>;
 	openInBrowser(urlOrPath: string): void;
 	refreshSlashCommandState(cwd?: string): Promise<void>;
+	handleSkillCommand(text: string): Promise<boolean>;
 
 	// Selector handling
 	showSettingsSelector(): void;
@@ -269,9 +270,10 @@ export interface InteractiveModeContext {
 	handlePlanModeCommand(initialPrompt?: string): Promise<void>;
 	handleGoalModeCommand(rest?: string): Promise<void>;
 	handleLoopCommand(args?: string): Promise<void>;
-	disableLoopMode(): void;
+	disableLoopMode(message?: string): Promise<void>;
 	pauseLoop(): void;
 	handlePlanApproval(details: PlanApprovalDetails): Promise<void>;
+	handleExitPlanModeTool(details: ExitPlanModeDetails): Promise<void>;
 
 	// Hook UI methods
 	initHooksAndCustomTools(): Promise<void>;

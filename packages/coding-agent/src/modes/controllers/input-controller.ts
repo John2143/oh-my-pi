@@ -8,7 +8,6 @@ import { createPromptActionAutocompleteProvider } from "../../modes/prompt-actio
 import { theme } from "../../modes/theme/theme";
 import type { InteractiveModeContext } from "../../modes/types";
 import type { AgentSessionEvent } from "../../session/agent-session";
-import { SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../../session/messages";
 import { executeBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
 import { copyToClipboard, readImageFromClipboard } from "../../utils/clipboard";
 import { getEditorCommand, openInEditor } from "../../utils/external-editor";
@@ -246,6 +245,13 @@ export class InputController {
 			// branch). Ctrl+Enter routes through `handleFollowUp` and dispatches the
 			// same helper with `"followUp"`.
 			if (await this.#invokeSkillCommand(text, "steer")) {
+				// When loop mode is active, resolve onInputCallback so the main
+				// loop can advance to the next iteration after the skill runs.
+				if (this.ctx.loopModeEnabled && this.ctx.onInputCallback) {
+					const cb = this.ctx.onInputCallback;
+					this.ctx.onInputCallback = undefined;
+					cb({ text, cancelled: false, started: false });
+				}
 				return;
 			}
 

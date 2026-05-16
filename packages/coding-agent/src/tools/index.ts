@@ -31,6 +31,7 @@ import { CalculatorTool } from "./calculator";
 import { type CheckpointState, CheckpointTool, RewindTool } from "./checkpoint";
 import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
+import { ExitLoopModeTool } from "./exit-loop-mode";
 import { FindTool } from "./find";
 import { GithubTool } from "./gh";
 import { HindsightRecallTool } from "./hindsight-recall";
@@ -72,6 +73,7 @@ export * from "./calculator";
 export * from "./checkpoint";
 export * from "./debug";
 export * from "./eval";
+export * from "./exit-loop-mode";
 export * from "./find";
 export * from "./gh";
 export * from "./hindsight-recall";
@@ -186,6 +188,8 @@ export interface ToolSession {
 	getGoalRuntime?: () => GoalRuntime | undefined;
 	/** Bridge to the connected client (e.g. ACP editor host). Tools should route fs/terminal/permission requests through this when available. */
 	getClientBridge?: () => ClientBridge | undefined;
+	/** Whether loop mode is currently active (controls injection of the exit_loop_mode tool). */
+	isLoopModeEnabled?: () => boolean;
 	/** Get compact conversation context for subagents (excludes tool results, system prompts) */
 	getCompactContext?: () => string;
 	/** Get cached todo phases for this session. */
@@ -319,8 +323,8 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	report_tool_issue: s => createReportToolIssueTool(s),
 	resolve: s => new ResolveTool(s),
 	goal: s => new GoalTool(s),
+	exit_loop_mode: s => new ExitLoopModeTool(s),
 };
-
 export type ToolName = keyof typeof BUILTIN_TOOLS;
 
 export interface EvalBackendsAllowance {
@@ -371,6 +375,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const goalModeActive = goalEnabled && session.getGoalModeState?.()?.enabled === true;
 	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
 		requestedTools = [...requestedTools, "goal"];
+	}
+	const loopModeEnabled = session.isLoopModeEnabled?.() ?? false;
+	if (loopModeEnabled && requestedTools && !requestedTools.includes("exit_loop_mode")) {
+		requestedTools = [...requestedTools, "exit_loop_mode"];
 	}
 	const backends = resolveEvalBackends(session);
 	const allowPython = backends.python;
@@ -494,6 +502,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 						.map(([name, factory]) => [name, factory] as const),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
 					...(goalModeActive ? ([["goal", HIDDEN_TOOLS.goal]] as const) : []),
+					...(loopModeEnabled ? ([["exit_loop_mode", HIDDEN_TOOLS.exit_loop_mode]] as const) : []),
 				];
 
 	const baseResults = await Promise.all(

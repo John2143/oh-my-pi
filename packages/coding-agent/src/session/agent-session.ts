@@ -516,6 +516,7 @@ const noOpUIContext: ExtensionUIContext = {
 	setTheme: _theme => Promise.resolve({ success: false, error: "UI not available" }),
 	setFooter: () => {},
 	setHeader: () => {},
+	registerStatusLineSegment: () => {},
 	setEditorComponent: () => {},
 	getToolsExpanded: () => false,
 	setToolsExpanded: () => {},
@@ -735,6 +736,7 @@ export class AgentSession {
 	#allowAcpAgentInitiatedTurns = false;
 	/** Per-session memory of allow_always / reject_always decisions for gated tools. */
 	#acpPermissionDecisions: Map<string, "allow_always" | "reject_always"> = new Map();
+	#loopModeEnabled = false;
 
 	// Compaction state
 	#compactionAbortController: AbortController | undefined = undefined;
@@ -3633,6 +3635,15 @@ export class AgentSession {
 
 	get goalRuntime(): GoalRuntime {
 		return this.#goalRuntime;
+	}
+
+	/** Whether loop mode is currently active (controls tool injection). */
+	isLoopModeEnabled(): boolean {
+		return this.#loopModeEnabled;
+	}
+
+	setLoopModeEnabled(enabled: boolean): void {
+		this.#loopModeEnabled = enabled;
 	}
 
 	markPlanReferenceSent(): void {
