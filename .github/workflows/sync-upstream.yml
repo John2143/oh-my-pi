@@ -34,6 +34,10 @@ jobs:
           git merge --ff-only upstream/main
           git push origin main
 
+      - name: Capture pre-rebase john SHA
+        id: pre
+        run: echo "sha=$(git rev-parse origin/john)" >> "$GITHUB_OUTPUT"
+
       - name: Rebase john onto upstream/main
         id: rebase
         run: |
@@ -52,6 +56,39 @@ jobs:
             } >> "$GITHUB_OUTPUT"
             echo "upstream_sha=$(git rev-parse upstream/main)" >> "$GITHUB_OUTPUT"
           fi
+
+      - name: Detect bun.lock / Cargo.lock changes
+        id: locks
+        if: steps.rebase.outputs.result == 'clean'
+        run: |
+          if git diff --name-only ${{ steps.pre.outputs.sha }}..HEAD -- bun.lock Cargo.lock | grep -q .; then
+            echo "changed=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Install Nix
+        if: steps.locks.outputs.changed == 'true'
+        uses: cachix/install-nix-action@v30
+        with:
+          extra_nix_config: |
+            experimental-features = nix-command flakes
+
+      - name: Regenerate hashes.json and bun.nix
+        id: regen
+        if: steps.locks.outputs.changed == 'true'
+        run: bash scripts/regen-nix-hashes.sh
+
+      - name: Commit and push regenerated hashes
+        if: steps.locks.outputs.changed == 'true'
+        run: |
+          if git diff --quiet -- bun.nix hashes.json; then
+            echo "regen produced no changes"
+            exit 0
+          fi
+          git add bun.nix hashes.json
+          git commit -m "ci(sync-upstream): regen bun.nix and cargoHash for new lockfiles"
+          git push origin john
 
       - name: Open or refresh conflict issue
         if: steps.rebase.outputs.result == 'conflict'
