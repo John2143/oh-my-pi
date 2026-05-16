@@ -1,15 +1,15 @@
 import type { AgentTool, AgentToolContext, AgentToolResult, AgentToolUpdateCallback } from "@oh-my-pi/pi-agent-core";
 import { prompt } from "@oh-my-pi/pi-utils";
-import { Type } from "@sinclair/typebox";
+import * as z from "zod/v4";
 import exitLoopModeDescription from "../prompts/tools/exit-loop-mode.md" with { type: "text" };
 import type { ToolSession } from ".";
 import { ToolError } from "./tool-errors";
 
-const exitLoopModeSchema = Type.Object({
-	summary: Type.Optional(Type.String({ description: "Brief summary of what was accomplished" })),
+const exitLoopModeSchema = z.object({
+	summary: z.string().describe("Brief summary of what was accomplished").optional(),
 });
 
-type ExitLoopModeParams = typeof exitLoopModeSchema.static;
+type ExitLoopModeParams = z.infer<typeof exitLoopModeSchema>;
 
 export interface ExitLoopModeDetails {
 	summary?: string;
