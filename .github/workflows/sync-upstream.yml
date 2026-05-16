@@ -13,7 +13,7 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
         with:
           fetch-depth: 0
           ref: john
@@ -55,7 +55,7 @@ jobs:
 
       - name: Open or refresh conflict issue
         if: steps.rebase.outputs.result == 'conflict'
-        uses: actions/github-script@v7
+        uses: actions/github-script@v8
         env:
           CONFLICTS: ${{ steps.rebase.outputs.conflicts }}
           UPSTREAM_SHA: ${{ steps.rebase.outputs.upstream_sha }}
