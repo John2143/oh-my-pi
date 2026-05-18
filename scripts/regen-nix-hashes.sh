@@ -13,7 +13,7 @@ nix run github:nix-community/bun2nix/staging-2.1.0 -- -l ./bun.lock -o ./bun.nix
 echo "Probing cargoHash..."
 jq '.cargoHash = ""' hashes.json > hashes.json.tmp && mv hashes.json.tmp hashes.json
 
-got=$(nix build .#omp 2>&1 | awk '/got: *sha256-/{print $2; exit}')
+got=$(nix build .#omp 2>&1 | awk '/got: *sha256-/{print $2; exit}') || true
 if [ -z "$got" ]; then
   echo "could not extract cargoHash from build output" >&2
   exit 1
