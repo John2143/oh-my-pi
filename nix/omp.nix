@@ -12,6 +12,7 @@
   zlib,
   libclang,
   zig,
+  jq,
   src,
 }:
 
@@ -74,6 +75,7 @@ stdenv.mkDerivation {
     rustPlatform.cargoSetupHook
     pkg-config
     makeWrapper
+    jq
     zig
   ]
   ++ lib.optionals stdenv.hostPlatform.isLinux [ autoPatchelfHook ];
@@ -122,6 +124,13 @@ stdenv.mkDerivation {
       fi
     done
     sed -i 's/: "\^/: "/g; s/: "~/: "/g' bun.lock
+
+    # python/robomp/web is a Vite/SolidJS frontend unrelated to the omp binary.
+    # bun 1.3.13 in the sandbox tries to download manifests for its catalog deps
+    # (tailwindcss, vite, solid-js, etc.) even with --linker=isolated, causing
+    # ConnectionRefused failures. Remove it from the workspace list.
+    jq 'del(.workspaces.packages[] | select(. == "python/robomp/web"))' package.json > package.json.tmp && mv package.json.tmp package.json
+    sed -i '/robomp-web@workspace/d' bun.lock
 
     # swarm-extension declares a peerDependency on @oh-my-pi/pi-coding-agent
     # with a hard-coded major (e.g. ^13) that upstream forgot to bump for the
