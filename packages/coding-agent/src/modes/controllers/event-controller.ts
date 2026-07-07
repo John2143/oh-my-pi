@@ -1060,7 +1060,6 @@ export class EventController {
 				}
 			}
 		}
-	}
 		if (event.toolName === "exit_loop_mode" && !event.isError) {
 			const details = event.result.details as ExitLoopModeDetails | undefined;
 			await this.ctx.disableLoopMode(
@@ -1069,6 +1068,7 @@ export class EventController {
 					: "Loop mode exited by agent. All work is complete.",
 			);
 		}
+	}
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		// A superseded agent_end: the agent is already streaming a fresh turn, so
 		// this event belongs to a turn that has already been replaced. The session

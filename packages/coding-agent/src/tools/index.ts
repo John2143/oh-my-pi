@@ -654,6 +654,7 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 						.map(([name, factory]) => [name, factory] as const),
 					...(includeYield ? ([["yield", HIDDEN_TOOLS.yield]] as const) : []),
 					...(goalModeActive ? ([["goal", HIDDEN_TOOLS.goal]] as const) : []),
+					...(loopModeEnabled ? ([["exit_loop_mode", HIDDEN_TOOLS.exit_loop_mode]] as const) : []),
 				];
 
 	const baseResults = await Promise.all(
