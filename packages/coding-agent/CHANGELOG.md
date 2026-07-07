@@ -2,6 +2,14 @@
 
 ## [Unreleased]
 
+### Added
+
+- Agent-initiated loop exit via `exit_loop_mode` tool. When the agent determines all work is complete during `/loop` mode, it can call this tool to signal the harness to exit the loop with an optional summary.
+
+### Fixed
+
+- Skill commands (`/skill:name`) in loop mode now correctly load skill content on every iteration instead of sending raw text to the model.
+- First user-submitted prompt in loop mode now properly captured as the loop prompt.
 ### Changed
 
 - Memoized non-message token totals (system prompt, tool schemas, skills) so the per-turn compaction and context-threshold paths recompute them at most once per input change instead of on every call. `getContextBreakdown` and `#estimateStoredContextTokens` previously re-tokenized the system prompt and every tool's wire schema (per-tool `JSON.stringify`) several times per turn over inputs that change at most once per turn.
