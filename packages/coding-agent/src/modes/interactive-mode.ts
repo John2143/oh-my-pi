@@ -114,6 +114,7 @@ import { normalizeLocalScheme } from "../tools/path-utils";
 import { replaceTabs, TRUNCATE_LENGTHS, truncateToWidth } from "../tools/render-utils";
 import { setAutoQaConsentHandler } from "../tools/report-tool-issue";
 import { type ResolveToolDetails, runResolveInvocation } from "../tools/resolve";
+import { invokeSkillCommandFromText, isKnownSkillCommand } from "./skill-command";
 import { formatPhaseDisplayName, todoMatchesAnyDescription } from "../tools/todo";
 import { ToolError } from "../tools/tool-errors";
 import { vocalizer } from "../tts/vocalizer";
@@ -1256,6 +1257,15 @@ export class InteractiveMode implements InteractiveModeContext {
 			return;
 		}
 
+		// Route skill commands through the skill loader so content is loaded
+		// instead of sending raw text to the model on each loop iteration.
+		if (prompt.startsWith("/skill:") && isKnownSkillCommand(this, prompt)) {
+			await invokeSkillCommandFromText(this, prompt, "steer", { propagateErrors: true });
+			const cb = this.onInputCallback;
+			this.onInputCallback = undefined;
+			cb({ started: false });
+			return;
+		}
 		if (action === "compact") {
 			await this.handleCompactCommand();
 		} else if (action === "reset") {
