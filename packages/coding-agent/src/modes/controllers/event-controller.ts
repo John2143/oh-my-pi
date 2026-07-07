@@ -26,6 +26,7 @@ import type { AgentSessionEvent } from "../../session/agent-session";
 import { isSilentAbort, readQueueChipText, resolveAbortLabel } from "../../session/messages";
 import { previewLine, TRUNCATE_LENGTHS } from "../../tools/render-utils";
 import type { ResolveToolDetails } from "../../tools/resolve";
+import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";
 import { nextActionableTask } from "../../tools/todo";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
@@ -1060,6 +1061,14 @@ export class EventController {
 			}
 		}
 	}
+		if (event.toolName === "exit_loop_mode" && !event.isError) {
+			const details = event.result.details as ExitLoopModeDetails | undefined;
+			await this.ctx.disableLoopMode(
+				details?.summary
+					? `Loop mode exited by agent. ${details.summary}`
+					: "Loop mode exited by agent. All work is complete.",
+			);
+		}
 	async #handleAgentEnd(_event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {
 		// A superseded agent_end: the agent is already streaming a fresh turn, so
 		// this event belongs to a turn that has already been replaced. The session

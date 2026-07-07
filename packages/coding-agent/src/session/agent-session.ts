@@ -1573,6 +1573,7 @@ export class AgentSession {
 	#planModeState: PlanModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
+	#loopModeEnabled = false;
 	#advisorEnabled = false;
 	#advisorTools?: AgentTool[];
 	#advisorWatchdogPrompt?: string;
@@ -6924,6 +6925,13 @@ export class AgentSession {
 
 	setGoalModeState(state: GoalModeState | undefined): void {
 		this.#goalModeState = state;
+	}
+	isLoopModeEnabled(): boolean {
+		return this.#loopModeEnabled;
+	}
+
+	setLoopModeEnabled(enabled: boolean): void {
+		this.#loopModeEnabled = enabled;
 	}
 
 	get goalRuntime(): GoalRuntime {

@@ -2228,6 +2228,18 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 				builtInRegistryToolNames.add(goalTool.name);
 			}
 		}
+		// Always register exit_loop_mode in the registry for mid-session activation
+		// by handleLoopCommand / disableLoopMode.
+		if (!toolRegistry.has("exit_loop_mode")) {
+			const exitLoopModeTool = await logger.time(
+				"createTools:exit_loop_mode:session",
+				HIDDEN_TOOLS.exit_loop_mode,
+				toolSession,
+			);
+			if (exitLoopModeTool) {
+				toolRegistry.set(exitLoopModeTool.name, wrapToolWithMetaNotice(exitLoopModeTool));
+			}
+		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 			builtInRegistryToolNames.delete(tool.name);
@@ -2463,7 +2475,7 @@ export async function createAgentSession(options: CreateAgentSessionOptions = {}
 		const defaultInactiveToolNames = new Set(
 			registeredTools.filter(tool => tool.definition.defaultInactive).map(tool => tool.definition.name),
 		);
-		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
+		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal" && name !== "exit_loop_mode");
 		const initialRequestedActiveToolNames = options.toolNames
 			? requestedActiveToolNames
 			: requestedActiveToolNames.filter(name => !defaultInactiveToolNames.has(name));

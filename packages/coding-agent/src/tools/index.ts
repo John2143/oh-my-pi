@@ -45,6 +45,7 @@ import { DebugTool } from "./debug";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
 import { GithubTool } from "./gh";
+import { ExitLoopModeTool } from "./exit-loop-mode";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
 import { InspectImageTool } from "./inspect-image";
@@ -97,6 +98,7 @@ export * from "./memory-reflect";
 export * from "./memory-retain";
 export * from "./read";
 export * from "./report-tool-issue";
+export * from "./exit-loop-mode";
 export * from "./resolve";
 export * from "./review";
 export * from "./search-tool-bm25";
@@ -374,6 +376,8 @@ export interface ToolSession {
 	getTelemetry?: () => AgentTelemetryConfig | undefined;
 	/** Return image attachments visible to tools for resolving labels such as `Image #1`. */
 	getImageAttachments?: () => ImageAttachmentEntry[];
+	/** Whether loop mode is currently active (controls injection of the exit_loop_mode tool). */
+	isLoopModeEnabled?: () => boolean;
 }
 
 export type ToolFactory = (session: ToolSession) => Tool | null | Promise<Tool | null>;
@@ -479,6 +483,7 @@ export const HIDDEN_TOOLS: Record<string, ToolFactory> = {
 	report_tool_issue: s => createReportToolIssueTool(s),
 	resolve: s => new ResolveTool(s),
 	goal: s => new GoalTool(s),
+	exit_loop_mode: s => new ExitLoopModeTool(s),
 };
 
 export type ToolName = BuiltinToolName;
@@ -494,6 +499,10 @@ export async function createTools(session: ToolSession, toolNames?: string[]): P
 	const goalModeActive = goalEnabled && session.getGoalModeState?.()?.enabled === true;
 	if (goalModeActive && requestedTools && !requestedTools.includes("goal")) {
 		requestedTools = [...requestedTools, "goal"];
+	}
+	const loopModeEnabled = session.isLoopModeEnabled?.() ?? false;
+	if (loopModeEnabled && requestedTools && !requestedTools.includes("exit_loop_mode")) {
+		requestedTools = [...requestedTools, "exit_loop_mode"];
 	}
 	const backends = resolveEvalBackends(session);
 	const allowPython = backends.python;
