@@ -32,13 +32,30 @@
             aarch64-darwin = "bun-darwin-aarch64";
           }.${system} or (throw "Unsupported platform for bun: ${system}");
 
-          bun_1_3_14 = pkgs.bun.overrideAttrs (old: rec {
+          bun_1_3_14 = pkgs.stdenv.mkDerivation {
+            pname = "bun";
             version = "1.3.14";
             src = pkgs.fetchurl {
-              url = "https://github.com/oven-sh/bun/releases/download/bun-v${version}/${bunBinaryName}.zip";
+              url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/${bunBinaryName}.zip";
               hash = "sha256-lR7iruhV8IWVruxiJSJqKY0/6oOj3NZGXAnLzN9+hI8=";
             };
-          });
+            nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+            buildInputs = with pkgs; [ openssl zlib ];
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/bin
+              cp bun $out/bin/bun
+              ln -sf $out/bin/bun $out/bin/bunx
+              runHook postInstall
+            '';
+            meta = with pkgs.lib; {
+              description = "Incredibly fast JavaScript runtime, bundler, test runner, and package manager";
+              homepage = "https://bun.sh";
+              license = licenses.mit;
+              mainProgram = "bun";
+              platforms = [ "x86_64-linux" "aarch64-linux" "x86_64-darwin" "aarch64-darwin" ];
+            };
+          };
 
           omp = pkgs.callPackage ./nix/omp.nix {
             bun = bun_1_3_14;
