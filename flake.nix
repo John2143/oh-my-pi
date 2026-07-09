@@ -39,7 +39,7 @@
               url = "https://github.com/oven-sh/bun/releases/download/bun-v1.3.14/${bunBinaryName}.zip";
               hash = "sha256-lR7iruhV8IWVruxiJSJqKY0/6oOj3NZGXAnLzN9+hI8=";
             };
-            nativeBuildInputs = [ pkgs.autoPatchelfHook ];
+            nativeBuildInputs = [ pkgs.unzip pkgs.autoPatchelfHook ];
             buildInputs = with pkgs; [ openssl zlib ];
             installPhase = ''
               runHook preInstall
