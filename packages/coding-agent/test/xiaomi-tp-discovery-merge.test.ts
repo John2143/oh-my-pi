@@ -29,6 +29,15 @@ function bundled(baseUrl: string): Model<"openai-completions"> {
 	});
 }
 
+function anthropic(baseUrl: string, replayUnsignedThinking?: boolean) {
+	return buildModel({
+		...bundled(baseUrl),
+		api: "anthropic-messages",
+		reasoning: true,
+		compat: replayUnsignedThinking === undefined ? undefined : { replayUnsignedThinking },
+	});
+}
+
 describe("mergeDiscoveredModel", () => {
 	test("prefers discovered baseUrl over bundled baseUrl (xiaomi tp- regression)", () => {
 		const discovered = bundled(TOKEN_PLAN);
@@ -72,6 +81,25 @@ describe("mergeDiscoveredModel", () => {
 		const existing = bundled(STANDARD);
 		const merged = mergeDiscoveredModel(discovered, existing, { baseUrl: "https://my-proxy.example.com/v1" });
 		expect(merged.baseUrl).toBe("https://my-proxy.example.com/v1");
+	});
+
+	test("provider compat override wins over discovered compat when bundled entry exists", () => {
+		const discovered = anthropic(TOKEN_PLAN, true);
+		const existing = anthropic(STANDARD, true);
+		const merged = mergeDiscoveredModel(discovered, existing, {
+			compat: { replayUnsignedThinking: false },
+		});
+		expect(merged.compat.replayUnsignedThinking).toBe(false);
+		expect(merged.compatConfig?.replayUnsignedThinking).toBe(false);
+	});
+
+	test("provider compat override wins over discovered defaults when no bundled entry exists", () => {
+		const discovered = anthropic(TOKEN_PLAN);
+		const merged = mergeDiscoveredModel(discovered, undefined, {
+			compat: { replayUnsignedThinking: false },
+		});
+		expect(merged.compat.replayUnsignedThinking).toBe(false);
+		expect(merged.compatConfig?.replayUnsignedThinking).toBe(false);
 	});
 
 	test("preserves provider override transport on rediscovery (#2555 openrouter gateway regression)", () => {

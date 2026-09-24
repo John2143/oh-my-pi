@@ -140,13 +140,15 @@ interface ProviderOverride {
  * default openai-completions transport after the background catalog
  * refresh — so the first `/model` switch after boot hits the raw OpenAI
  * chat-completions URL instead of the gateway's `/v1/pi/stream` (#2555).
+ * Provider compatibility overrides are likewise re-applied so sparse discovery
+ * metadata cannot erase endpoint-specific safety settings.
  * See `xiaomi-tp-discovery-merge.test.ts` and the `refresh()` baseUrl-override
  * regression in `model-registry.test.ts`.
  */
 export function mergeDiscoveredModel<TApi extends Api>(
 	model: Model<TApi>,
 	existing: Model<Api> | undefined,
-	providerOverride?: Pick<ProviderOverride, "baseUrl" | "headers" | "remoteCompaction" | "transport">,
+	providerOverride?: Pick<ProviderOverride, "baseUrl" | "headers" | "compat" | "remoteCompaction" | "transport">,
 ): Model<TApi> {
 	if (existing) {
 		const supportsTools = model.supportsTools ?? existing.supportsTools;
@@ -160,7 +162,7 @@ export function mergeDiscoveredModel<TApi extends Api>(
 				providerOverride?.remoteCompaction,
 			),
 			...(supportsTools !== undefined ? { supportsTools } : {}),
-			compat: model.compatConfig,
+			compat: mergeCompat(model.compatConfig, providerOverride?.compat),
 		} as ModelSpec<TApi>);
 	}
 	if (providerOverride) {
@@ -173,7 +175,7 @@ export function mergeDiscoveredModel<TApi extends Api>(
 				model.remoteCompaction,
 				providerOverride.remoteCompaction,
 			),
-			compat: model.compatConfig,
+			compat: mergeCompat(model.compatConfig, providerOverride.compat),
 		} as ModelSpec<TApi>);
 	}
 	return model;

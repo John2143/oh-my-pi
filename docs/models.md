@@ -103,7 +103,7 @@ providers:
 
 ### Allowed auth/discovery values
 
-- `auth`: `apiKey` (default), `none`, or `oauth`; for `models.yml` custom models, `oauth` is accepted by schema but does not waive the `apiKey` requirement
+- `auth`: `apiKey` (default), `none`, or `oauth`; custom models under the built-in `anthropic` provider may use `auth: oauth` with a locally stored Anthropic credential, while other custom providers still require `apiKey` unless `auth: none`
 - `discovery.type`: `ollama`, `llama.cpp`, `lm-studio`, `openai-models-list`, `proxy`, or `litellm`
 - `transport`: `pi-native` only. When set, every model under that provider is sent to an `omp auth-gateway` compatible `baseUrl` via `POST /v1/pi/stream`; `apiKey` is the gateway bearer.
 
@@ -114,7 +114,7 @@ providers:
 Required:
 
 - `baseUrl`
-- `apiKey` unless `auth: none`
+- `apiKey` unless `auth: none`, or the built-in `anthropic` provider uses `auth: oauth`
 - `api` at provider level or each model
 
 ### Override-only provider (`models` missing or empty)
