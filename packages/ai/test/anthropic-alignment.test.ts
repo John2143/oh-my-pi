@@ -198,6 +198,21 @@ describe("Anthropic request fingerprint alignment", () => {
 		expect(headers["x-client-request-id"]).toMatch(/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/);
 	});
 
+	it("advertises an accepted Claude Code version in OAuth User-Agent and billing", () => {
+		const headers = buildAnthropicHeaders({
+			apiKey: "sk-ant-oat-test",
+			isOAuth: true,
+			stream: true,
+		});
+		const userAgentVersion = headers["User-Agent"]?.match(/^claude-cli\/(\d+)\.(\d+)\.(\d+)(?:\s|$)/);
+		expect(userAgentVersion).not.toBeNull();
+		const [major, minor, patch] = userAgentVersion!.slice(1, 4).map(Number);
+		expect(major > 2 || (major === 2 && (minor > 1 || (minor === 1 && patch >= 280)))).toBe(true);
+
+		const billingHeader = buildAnthropicSystemBlocks([], { includeClaudeCodeInstruction: true })?.[0]?.text;
+		expect(billingHeader).toMatch(new RegExp(`\\bcc_version=${major}\\.${minor}\\.${patch}\\.[a-f0-9]{3};`));
+	});
+
 	it("sends redact-thinking beta only when thinking display is omitted", () => {
 		const baseArgs = {
 			model: ANTHROPIC_MODEL,
