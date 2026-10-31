@@ -46,6 +46,7 @@ import {
 import type { NotificationRule } from "../../session/transcript/ttsr-notification";
 import { PROPOSE_COMMAND_NAME } from "../../tools/details/resolve";
 import type { TodoPhase } from "../../tools/details/todo";
+import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";
 import { proposeDispatchDetails } from "../../tools/resolve";
 import { cfgSpeechEnabled, cfgSpeechMode } from "../../tts/settings";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
@@ -2459,6 +2460,14 @@ export class EventController {
 					error: err instanceof Error ? err.message : String(err),
 				});
 			});
+		}
+		// The agent decided the loop is finished: tear loop mode down from the tool result, and
+		// surface its summary on the status line so the exit reads as intentional, not a crash.
+		if (event.toolName === "exit_loop_mode" && !event.isError) {
+			const summary = (event.result.details as ExitLoopModeDetails | undefined)?.summary;
+			this.ctx.disableLoopMode(
+				summary ? `Loop mode exited by agent. ${summary}` : "Loop mode exited by agent. All work is complete.",
+			);
 		}
 	}
 	/**
