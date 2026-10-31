@@ -1202,6 +1202,8 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	#vibeModeState: VibeModeState | undefined;
 	#goalModeState: GoalModeState | undefined;
 	#goalRuntime: GoalRuntime;
+	/** `/loop` state owned by the interactive UI; gates the hidden `exit_loop_mode` tool. */
+	#loopModeEnabled = false;
 	readonly #advisors: SessionAdvisors;
 	/** Resolves once the resume-time advisor spend backfill settles. */
 	#advisorCostRestore: Promise<void> = Promise.resolve();
@@ -8577,6 +8579,14 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 	setGoalModeState(state: GoalModeState | undefined): void {
 		this.#goalModeState = state;
+	}
+
+	isLoopModeEnabled(): boolean {
+		return this.#loopModeEnabled;
+	}
+
+	setLoopModeEnabled(enabled: boolean): void {
+		this.#loopModeEnabled = enabled;
 	}
 
 	getVibeModeState(): VibeModeState | undefined {
