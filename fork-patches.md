@@ -1,8 +1,9 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` tip (`a1901b56ad`, 2026-10-31, version 18.14.0). This documents every change we maintain, why it exists, and where to find it.
+Rebased onto `upstream/main` tip (`83774c81bc`, 2026-11-09, version 18.18.2 plus 53 commits). This documents every change we maintain, why it exists, and where to find it.
 
-The fork carries exactly one patch. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
+
+The fork carries two patches. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
 
 ## Patch 1: exit_loop_mode Tool (`575efc857a`)
 
@@ -27,6 +28,16 @@ The fork carries exactly one patch. Everything else the fork used to ship was ei
 
 **Port notes vs the 16.3.11 version** (`74ac4a051`): v18 declares `disableLoopMode` synchronous across ~6 call sites, so it was not ported to async — deactivation is fire-and-forget there and the tool's own guard covers the gap. Activation is awaited instead, because `setActiveToolsByName` drops unknown names and a raced activation would hide the tool during iteration 1. Registration is eager rather than lazy: it runs before the blanket `ExtensionToolWrapper` pass, so the entry gets the approval gate like every other built-in.
 
+## Patch 2: read-only config in setup scenes (`e40e18ff02`)
+
+**Why**: `Settings.flush()` rethrows write failures by contract — the upstream settings tests assert rejections for `ELOOP`, `ENOTDIR` and invalid configs — and all three setup-scene flushes awaited it unguarded. A home-manager-managed `config.yml` is a symlink into the read-only nix store, so finishing the setup wizard rejected with `EROFS` and the TUI reported it as an unhandled rejection (the write lands next to the *resolved* target, i.e. inside `/nix/store`). Selectors and the session-move path already catch this and show a clean error; only the wizard was unguarded.
+
+**Files**:
+- `packages/coding-agent/src/modes/setup.ts` — `flushSetupSettings()` helper logs `Setup: failed to persist settings`; `selectModel`, `saveComposerShape` and `markSetupWizardComplete` route through it, so the in-memory setting still advances and only persistence is skipped.
+- `packages/coding-agent/test/setup-wizard-readonly-config.test.ts` — NEW: symlinks `config.yml` into an unwritable directory and asserts completion warns rather than rejects, with nothing written to the store.
+
+**Port note**: the first attempt guarded `flush()` itself; that widens a documented contract and breaks the upstream rejection tests, so the guard belongs at the UI call site instead.
+
 ## No Longer Carried
 
 - **Nix build system** — upstream ships `flake.nix`, `nix/package.nix`, `nix/bun.nix`, `nix/dev-shell.nix`, `nix/home-manager.nix`, `nix/nixos-module.nix` and exposes `packages.<system>.omp`, so the dotfiles wrapper resolves against upstream's own derivation. The old `nix/omp.nix` + `#private`-field sed workarounds for bun 1.3.13 are obsolete.
@@ -42,10 +53,33 @@ git remote add upstream https://github.com/can1357/oh-my-pi.git
 git fetch upstream main
 git checkout -B john upstream/main
 
-# The single patch:
 git cherry-pick 575efc857a   # exit_loop_mode
+git cherry-pick e40e18ff02   # read-only config in setup scenes
 ```
 
-Expect conflicts on a much later upstream: the anchors are `HIDDEN_TOOL_NAMES`, `HIDDEN_TOOLS`, the `toolSession` literal, the eager `goal` registration block, `requestedActiveToolNames`, `AgentSession`'s mode-state accessors, `#enableLoopMode`/`disableLoopMode`, and `#handleToolExecutionEnd`.
+The `exit_loop_mode` patch conflicts on the import block of
+`packages/coding-agent/src/modes/controllers/event-controller.ts`: upstream
+replaced `recoverAskQuestions` with `recoverAskHtml` + the html-form helpers.
+Resolve by keeping upstream's imports and appending
+`import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";`.
+Everything else auto-merged onto 18.18.2.
 
-The tag `fork-v16-pre-v18` pins the abandoned 16.3.11 tree (all 12 old fork commits) if an old branch is ever needed.
+Expect the same class of conflict on a later upstream: the anchors are
+`HIDDEN_TOOL_NAMES`, `HIDDEN_TOOLS`, the `toolSession` literal, the eager `goal`
+registration block, `requestedActiveToolNames`, `AgentSession`'s mode-state
+accessors, `#enableLoopMode`/`disableLoopMode`, and `#handleToolExecutionEnd`.
+The setup patch anchors are the three `await ctx.settings.flush()` /
+`await settings.flush()` call sites plus `markSetupWizardComplete` in
+`modes/setup.ts`.
+
+## Notes for the Nix consumer
+
+18.15+ added `update.auto` (background self-update). `canSelfUpdate()` returns
+false for anything under `/nix/store`, so the setting and its setup scene are
+skipped for the dotfiles install — updates have to arrive through the flake
+input. `providers.webSearch` is retired and migrated into `modelRoles.web`, and
+`.omp/agent/settings.json` is read only as a legacy migration source into
+`config.yml`.
+
+The tag `fork-v16-pre-v18` pins the abandoned 16.3.11 tree (all 12 old fork
+commits) if an old branch is ever needed.
