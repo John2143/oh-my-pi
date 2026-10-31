@@ -10,6 +10,8 @@ import {
 	type SetupSceneSelectionOptions,
 	setupWizardAllowed,
 } from "@oh-my-pi/pi-tui/setup/wizard";
+
+import { logger } from "@oh-my-pi/pi-utils";
 import type { Settings } from "../config/settings";
 import { canSelfUpdate } from "../cli/update-cli";
 import { captureBrowserSession } from "../utils/browser-session";
@@ -68,7 +70,7 @@ export function createSetupHost(ctx: InteractiveModeContext): SetupHost {
 			const projectScope = cfgModelRoleStorage.get(ctx.settings) === "project";
 			await ctx.session.setModel(model, "default", { selector, persist: !projectScope });
 			if (projectScope) ctx.settings.setProjectModelRole("default", selector);
-			await ctx.settings.flush();
+			await flushSetupSettings(ctx.settings);
 		},
 		refreshProvider: async provider => {
 			// An OAuth alias (`openai-codex-device`) stores its credential under the base provider.
@@ -77,7 +79,7 @@ export function createSetupHost(ctx: InteractiveModeContext): SetupHost {
 		},
 		saveComposerShape: async shape => {
 			cfgComposerShape.set(ctx.settings, shape);
-			await ctx.settings.flush();
+			await flushSetupSettings(ctx.settings);
 		},
 		saveSymbolPreset: preset => {
 			cfgSymbolPreset.set(ctx.settings, preset);
@@ -101,10 +103,24 @@ export function createSetupHost(ctx: InteractiveModeContext): SetupHost {
 	};
 }
 
+/**
+ * Persist setup choices without aborting the overlay. `Settings.flush()` deliberately
+ * rethrows when the write fails, and a home-manager-managed `config.yml` (a symlink into
+ * the read-only nix store) fails every save with EROFS — a setup scene must degrade to a
+ * warning rather than surface that as an unhandled rejection.
+ */
+async function flushSetupSettings(settings: Settings): Promise<void> {
+	try {
+		await settings.flush();
+	} catch (error) {
+		logger.warn("Setup: failed to persist settings", { error: String(error) });
+	}
+}
+
 /** Persist completion only after the setup overlay finishes. */
 export async function markSetupWizardComplete(settings: Settings, version = CURRENT_SETUP_VERSION): Promise<void> {
 	cfgSetupVersion.set(settings, version);
-	await settings.flush();
+	await flushSetupSettings(settings);
 }
 
 /** Select eligible setup scenes using the application's live capabilities. */
