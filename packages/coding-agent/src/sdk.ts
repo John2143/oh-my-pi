@@ -2670,6 +2670,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				session ? session.trackEvalExecution(execution, abortController) : execution,
 			getSessionId: () => sessionManager.getSessionId?.() ?? null,
 			isDisposed: () => session?.isDisposed ?? false,
+			isLoopModeEnabled: () => session?.isLoopModeEnabled() ?? false,
 			getHindsightSessionState: () => session?.getHindsightSessionState(),
 			getMnemopiSessionState: () => session?.getMnemopiSessionState(),
 			getAgentId: () => resolvedAgentId,
@@ -3893,6 +3894,24 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				nativeToolsByName.set(goalTool.name, wrapped);
 			}
 		}
+		// `/loop` is interactive-only and starts mid-session, so `exit_loop_mode` has to be in the
+		// registry before loop mode can activate it: `setActiveToolsByName` drops names it cannot
+		// find, which would leave the model without the tool the loop prompt tells it to call (the
+		// same failure issue #9444 fixed for `goal`). No settings gate — the tool is inert until
+		// loop mode turns it on, and restricted (subagent) sessions never enter loop mode.
+		if (!restrictToolNames && !toolRegistry.has("exit_loop_mode")) {
+			const exitLoopModeTool = await logger.time(
+				"createTools:exit_loop_mode:session",
+				HIDDEN_TOOLS.exit_loop_mode,
+				toolSession,
+			);
+			if (exitLoopModeTool) {
+				const wrapped = wrapToolWithMetaNotice(exitLoopModeTool);
+				toolRegistry.set(exitLoopModeTool.name, wrapped);
+				builtInRegistryToolNames.add(exitLoopModeTool.name);
+				nativeToolsByName.set(exitLoopModeTool.name, wrapped);
+			}
+		}
 		for (const tool of wrappedExtensionTools) {
 			toolRegistry.set(tool.name, tool);
 			builtInRegistryToolNames.delete(tool.name);
@@ -4526,7 +4545,7 @@ async function createAgentSessionScoped(options: CreateAgentSessionOptions): Pro
 				return tool?.defaultInactive === true || tool?.hidden === true;
 			}),
 		);
-		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal");
+		const requestedActiveToolNames = normalizedRequested.filter(name => name !== "goal" && name !== "exit_loop_mode");
 		const explicitlyRequestedToolNameSet = explicitlyRequestedToolNames
 			? new Set(explicitlyRequestedToolNames)
 			: undefined;

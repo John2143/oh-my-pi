@@ -57,6 +57,7 @@ import { DebugTool } from "./debug";
 import { cfgIdaAvailable } from "../ida/install";
 import { EvalTool } from "./eval";
 import { resolveEvalBackends } from "./eval-backends";
+import { ExitLoopModeTool } from "./exit-loop-mode";
 import { GithubTool } from "./gh";
 import { GlobTool } from "./glob";
 import { GrepTool } from "./grep";
@@ -479,6 +480,8 @@ export interface ToolSession {
 	getGoalModeState?: () => GoalModeState | undefined;
 	/** Goal runtime for the active agent session. */
 	getGoalRuntime?: () => GoalRuntime | undefined;
+	/** Whether loop mode is active; gates the `exit_loop_mode` tool and hides it from the initial set. */
+	isLoopModeEnabled?: () => boolean;
 	/** Get cumulative session usage statistics (input/output tokens, cost). */
 	getUsageStatistics?: () => UsageStatistics;
 	/** Current per-turn token budget {total, spent, hard} for the eval `budget` helper. */
@@ -628,6 +631,7 @@ export const HIDDEN_TOOLS: Record<HiddenToolName, ToolFactory> = {
 	think: () => new ThinkTool(),
 	yield: s => new YieldTool(s),
 	goal: s => new GoalTool(s),
+	exit_loop_mode: s => new ExitLoopModeTool(s),
 };
 
 export type ToolName = BuiltinToolName;
