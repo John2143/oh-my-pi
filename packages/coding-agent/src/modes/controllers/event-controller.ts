@@ -55,6 +55,7 @@ import {
 import { previewLine, PREVIEW_LIMITS, TRUNCATE_LENGTHS } from "@oh-my-pi/pi-tui/render/render-utils";
 import { PROPOSE_DEVICE_NAME } from "@oh-my-pi/pi-tui/tools/resolve";
 import { writeDeviceDispatch } from "../../tools/resolve";
+import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";
 import { SpeechEnhancer } from "../../tts/speech-enhancer";
 import { vocalizer } from "../../tts/vocalizer";
 import { canonicalizeMessage } from "@oh-my-pi/pi-tui/chat/thinking-display";
@@ -2397,6 +2398,14 @@ export class EventController {
 						});
 					});
 			}
+		}
+		// The agent decided the loop is finished: tear loop mode down from the tool result, and
+		// surface its summary on the status line so the exit reads as intentional, not a crash.
+		if (event.toolName === "exit_loop_mode" && !event.isError) {
+			const summary = (event.result.details as ExitLoopModeDetails | undefined)?.summary;
+			this.ctx.disableLoopMode(
+				summary ? `Loop mode exited by agent. ${summary}` : "Loop mode exited by agent. All work is complete.",
+			);
 		}
 	}
 	async #handleAgentEnd(event: Extract<AgentSessionEvent, { type: "agent_end" }>): Promise<void> {

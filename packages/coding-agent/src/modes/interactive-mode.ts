@@ -3573,6 +3573,8 @@ export class InteractiveMode implements InteractiveModeContext {
 	disableLoopMode(message = "Loop mode disabled."): void {
 		const wasEnabled = this.loopModeEnabled;
 		this.loopModeEnabled = false;
+		this.session.setLoopModeEnabled(false);
+		this.#deactivateLoopExitTool();
 		this.loopModePaused = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = undefined;
@@ -3582,6 +3584,33 @@ export class InteractiveMode implements InteractiveModeContext {
 		this.#syncLoopModeStatus();
 		if (wasEnabled) {
 			this.showStatus(message);
+		}
+	}
+
+	/**
+	 * Withdraw `exit_loop_mode` once the loop ends. Fire-and-forget: every caller of
+	 * {@link disableLoopMode} is synchronous, and the tool itself refuses to run
+	 * whenever `isLoopModeEnabled()` is false, so a late registry update is harmless.
+	 */
+	#deactivateLoopExitTool(): void {
+		const activeTools = this.session.getActiveToolNames();
+		if (!activeTools.includes("exit_loop_mode")) return;
+		void this.session
+			.setActiveToolsByName(activeTools.filter(name => name !== "exit_loop_mode"))
+			.catch(error => logger.warn("Failed to deactivate exit_loop_mode", { error: String(error) }));
+	}
+
+	/**
+	 * Expose `exit_loop_mode` for the duration of the loop. Awaited by the caller so
+	 * the first iteration already advertises the tool the loop prompt asks it to call.
+	 */
+	async #activateLoopExitTool(): Promise<void> {
+		const activeTools = this.session.getActiveToolNames();
+		if (activeTools.includes("exit_loop_mode")) return;
+		try {
+			await this.session.setActiveToolsByName([...activeTools, "exit_loop_mode"]);
+		} catch (error) {
+			logger.warn("Failed to activate exit_loop_mode", { error: String(error) });
 		}
 	}
 
@@ -3631,7 +3660,7 @@ export class InteractiveMode implements InteractiveModeContext {
 			this.showError(parsed);
 			return undefined;
 		}
-		this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt));
+		await this.#enableLoopMode(parsed.limit, parsed.condition, Boolean(parsed.prompt));
 		// Hand any inline prompt back to the dispatcher so the normal submit flow
 		// runs the first iteration — it records the text as the loop prompt and
 		// auto-resubmits it after each yield, identical to typing the prompt right
@@ -3639,16 +3668,18 @@ export class InteractiveMode implements InteractiveModeContext {
 		return parsed.prompt;
 	}
 
-	#enableLoopMode(
+	async #enableLoopMode(
 		limit: LoopLimitConfig | undefined,
 		condition: LoopConditionConfig | undefined,
 		hasPrompt: boolean,
-	): void {
+	): Promise<void> {
 		this.loopModeEnabled = true;
 		this.loopModePaused = false;
 		this.loopPrompt = undefined;
 		this.loopLimit = createLoopLimitRuntime(limit);
 		this.loopCondition = condition;
+		this.session.setLoopModeEnabled(true);
+		await this.#activateLoopExitTool();
 		this.#syncLoopModeStatus();
 		const limitSuffix = limit ? ` Limited to ${describeLoopLimit(limit)}.` : "";
 		const remainingSuffix = this.loopLimit ? ` ${describeLoopLimitRuntime(this.loopLimit)}.` : "";
@@ -3879,7 +3910,7 @@ export class InteractiveMode implements InteractiveModeContext {
 					};
 				}
 				return async () => {
-					this.#enableLoopMode(limit, condition, prompt !== undefined);
+					await this.#enableLoopMode(limit, condition, prompt !== undefined);
 					if (prompt !== undefined) this.setLoopPrompt(prompt);
 				};
 			}
