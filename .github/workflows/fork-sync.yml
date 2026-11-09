@@ -17,10 +17,10 @@ on:
     - cron: "17 5 * * *"
   workflow_dispatch:
     inputs:
-      gate:
-        description: "Run typecheck + the full test suite before pushing"
+      force:
+        description: "Re-verify the current john tip even when upstream has not moved"
         type: boolean
-        default: true
+        default: false
 
 permissions:
   contents: write
@@ -64,8 +64,16 @@ jobs:
           git fetch upstream "$UPSTREAM_BRANCH"
 
           if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
-            echo "changed=no" >> "$GITHUB_OUTPUT"
-            echo "Already current with upstream/$UPSTREAM_BRANCH."
+            # Scheduled runs stop here: there is nothing new to verify, and the
+            # tip was already gated when it was pushed. A manual `force`
+            # dispatch re-runs the gate against the current tip.
+            if [ "${{ inputs.force }}" != "true" ]; then
+              echo "changed=no" >> "$GITHUB_OUTPUT"
+              echo "Already current with upstream/$UPSTREAM_BRANCH."
+              exit 0
+            fi
+            echo "Forced: verifying the current tip without a rebase."
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
             exit 0
           fi
 
@@ -94,15 +102,15 @@ jobs:
         run: nix develop .#default -c bun install --frozen-lockfile
 
       - name: Typecheck
-        if: steps.rebase.outputs.changed == 'yes' && inputs.gate != false
+        if: steps.rebase.outputs.changed == 'yes'
         run: nix develop .#default -c bun run ci:check:full
 
       - name: Build native addons
-        if: steps.rebase.outputs.changed == 'yes' && inputs.gate != false
+        if: steps.rebase.outputs.changed == 'yes'
         run: nix develop .#default -c bun run build:native
 
       - name: Full test suite
-        if: steps.rebase.outputs.changed == 'yes' && inputs.gate != false
+        if: steps.rebase.outputs.changed == 'yes'
         run: nix develop .#default -c bun run test
 
       - name: Push john
