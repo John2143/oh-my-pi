@@ -72,6 +72,15 @@ The setup patch anchors are the three `await ctx.settings.flush()` /
 `await settings.flush()` call sites plus `markSetupWizardComplete` in
 `modes/setup.ts`.
 
+## Fork-only CI (`.github/workflows/fork-sync.yml`)
+
+The fork's default branch is `john`, so the daily sync workflow lives there
+too (scheduled workflows only run from the default branch). It rebases onto
+`upstream/main`, runs `bun run ci:check:full`, builds the host native addon and
+runs the full `bun run test` suite, then force-pushes `john` only if all of it
+passes. Keep it when replaying the patches — it is the only automated check
+that the patches still compile against upstream.
+
 ## Notes for the Nix consumer
 
 18.15+ added `update.auto` (background self-update). `canSelfUpdate()` returns
