@@ -60,7 +60,10 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          git remote add upstream "$UPSTREAM_REPO"
+          # A self-hosted workspace keeps .git/config between runs, so the
+          # remote from a previous job is still there: add or repoint, never fail.
+          git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM_REPO"
+          git remote set-url upstream "$UPSTREAM_REPO"
           git fetch upstream "$UPSTREAM_BRANCH"
 
           if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
