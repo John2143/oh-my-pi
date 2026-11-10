@@ -150,6 +150,14 @@ fn parse_stat(pid: i32, line: &[u8]) -> Option<ProcInfo> {
 		std::str::from_utf8(f).ok()?.parse().ok()
 	}
 	let (comm, fields) = split_stat(line)?;
+	// envfs (NixOS `/bin`) reports the path it was asked for as the exec name,
+	// where an ordinary exec reports the basename: `/bin/sleep` rather than
+	// `sleep`. A comm is a display name, so keep the last component — the same
+	// string every FHS system reports.
+	let comm = match comm.iter().rposition(|&b| b == b'/') {
+		Some(slash) if slash + 1 < comm.len() => &comm[slash + 1..],
+		_ => comm,
+	};
 	let fields: Vec<&[u8]> = fields.take(20).collect();
 	let state = match fields.first()?.first()? {
 		b'R' => ProcState::Running,

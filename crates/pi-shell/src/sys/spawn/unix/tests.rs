@@ -1348,7 +1348,7 @@ fn one_engine_reader_feeds_every_external_it_is_handed_to() {
 	let mut bystander = spawner.spawn(idle).unwrap();
 	thread::sleep(Duration::from_millis(50));
 	let out = MemFile::default();
-	let by_path = sh("cat /dev/fd/63");
+	let by_path = sh("/bin/cat /dev/fd/63");
 	let mut reader = spec(&by_path, &env, NEW);
 	reader.stdio = [StdioSpec::Null, out.boxed(), StdioSpec::Null];
 	reader.extra_fds = vec![(63, StdioSpec::Pipe(sub))];
@@ -1367,7 +1367,7 @@ fn one_way_extra_fds_can_be_opened_by_path() {
 	let env = EnvView::default();
 	let s = NativeSpawner::default();
 	let (sub_out, out) = (MemFile::writer(), MemFile::default());
-	let a = sh("cat /dev/fd/63; echo to-sub > /dev/fd/62");
+	let a = sh("/bin/cat /dev/fd/63; echo to-sub > /dev/fd/62");
 	let mut sp = spec(&a, &env, NEW);
 	sp.stdio = [StdioSpec::Null, out.boxed(), StdioSpec::Null];
 	sp.extra_fds = vec![
