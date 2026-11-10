@@ -9,7 +9,12 @@ name: Fork sync
 #
 # Runner: the self-hosted `github` VM (label `nixos`). Every step runs inside
 # `nix develop .#default`, which is where bun, cargo, cargo-nextest and the
-# native build dependencies come from.
+# native build dependencies come from. `--no-eval-cache` is deliberate: the VM
+# collects garbage daily at 00:00 EST (05:00 UTC, 17 minutes before the cron
+# below), which deletes the dev shell's derivations while the eval cache still
+# points at them — `nix develop` then dies with "store path ... does not exist"
+# instead of re-instantiating. Re-evaluating costs seconds; the cache costs the
+# whole run.
 
 on:
   schedule:
@@ -114,19 +119,19 @@ jobs:
 
       - name: Install dependencies
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop .#default -c bun install --frozen-lockfile
+        run: nix develop --no-eval-cache .#default -c bun install --frozen-lockfile
 
       - name: Typecheck
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop .#default -c bun run ci:check:full
+        run: nix develop --no-eval-cache .#default -c bun run ci:check:full
 
       - name: Build native addons
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop .#default -c bun run build:native
+        run: nix develop --no-eval-cache .#default -c bun run build:native
 
       - name: Full test suite
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop .#default -c bun run test
+        run: nix develop --no-eval-cache .#default -c bun run test
 
       - name: Push john
         if: steps.rebase.outputs.changed == 'yes'
