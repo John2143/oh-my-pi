@@ -72,10 +72,20 @@ Rust suite (`bun run test` runs `cargo nextest` as one more chunk):
 - `pi-vcs`' git-runner fixtures assert their process group with
   `alias.pgid=!ps -o pgid= -p $$`, and the dev shell had no `procps`, so git's
   shell answered "ps: command not found".
+- envfs sets a process's `comm` to the path it was asked for, so a sleeper
+  started as `/bin/sleep` reported name `/bin/sleep`, not `sleep`. `pi-shell`'s
+  spawn and cancel fixtures match that bare name, so they timed out waiting for
+  a `sleep` that never appeared.
+- Two fixtures ran a *bare* command from a `PATH`-less shell (`cat /dev/fd/63`
+  in `one_way_extra_fds_can_be_opened_by_path`, `exec sleep 30` in rsync's
+  "stuck rsh"). A shell resolves those by `stat(2)`ing each `PATH` entry, which
+  envfs cannot answer, so both exited 127.
 
 **Fix**: `locate()` now treats a `NotFound` stat on a name containing `/` as
 "let the spawn decide": the spawn reports the same ENOENT when the program
-really is absent, so nothing is masked. `procps` joins the dev shell packages.
+really is absent, so nothing is masked. `parse_stat` keeps the last component of
+`comm`, which is what every FHS system reports. `procps` joins the dev shell
+packages, and the two fixtures use absolute paths.
 
 **Verified by**: `cargo nextest run -p pi-builtins -E 'test(exec_uses_shell_cwd)'`
 and the `pi-vcs` git-runner tests on the `github` runner VM, which is the only

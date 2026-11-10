@@ -408,7 +408,7 @@ fn cancel_mid_connection_exits_20_with_trailer() {
 	let dir = tempfile::tempdir().unwrap();
 	make_tree(&dir.path().join("src"));
 	let rsh = dir.path().join("stuckrsh");
-	fs::write(&rsh, "#!/bin/sh\nexec sleep 30\n").unwrap();
+	fs::write(&rsh, "#!/bin/sh\nexec /bin/sleep 30\n").unwrap();
 	fs::set_permissions(&rsh, fs::Permissions::from_mode(0o755)).unwrap();
 	let (mut host, cap) = crate::host::Host::for_test_owning("rsync", Vec::new(), dir.path());
 	let cancel = host.cancel_flag_for_test();
