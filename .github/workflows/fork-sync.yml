@@ -38,6 +38,11 @@ env:
   # Pooled, every failing chunk is collected into one report. 8 chunks at roughly
   # 1 GB each fits the 40 GB runner VM alongside its other runners.
   OMP_TEST_CONCURRENCY: "8"
+  # Per-chunk watchdog (scripts/ci-test-ts.ts chunkTimeoutMs, default 600). The
+  # Rust chunk is one pooled command that compiles the whole workspace before
+  # nextest starts: ~10 min cold, because checkout's `git clean` drops target/.
+  # 600 killed it at exit 137 mid-compile; this leaves room for compile plus run.
+  OMP_TEST_CHUNK_TIMEOUT: "1800"
   UPSTREAM_REPO: https://github.com/can1357/oh-my-pi.git
   UPSTREAM_BRANCH: main
   FORK_BRANCH: john
