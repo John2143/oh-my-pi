@@ -92,6 +92,31 @@ accessors, `#enableLoopMode`/`disableLoopMode`, and `#handleToolExecutionEnd`.
 The setup patch anchors are the three `ctx.settings.flush()` call sites plus
 `markSetupWizardComplete` in `modes/setup.ts`.
 
+## Fork-only CI (`.github/workflows/fork-sync.yml`)
+
+The fork's default branch is `john`, so the daily sync workflow lives here
+(scheduled workflows only run from the default branch). It rebases onto
+`upstream/main` and runs `bun run ci:check:full`, `bun run build:native` and
+`bun run test` with `OMP_TEST_CONCURRENCY=8`. Pooled mode also reports every
+failing chunk instead of stopping at the first. It force-pushes `john` only if
+all of that passes; otherwise it comments on the "fork-sync: john needs
+attention" issue. A manual `force=true` dispatch re-verifies the current tip.
+
+The self-hosted runner (`github-runner-oh-my-pi` on the `github` VM,
+dotfiles `nixos/github-configuration.nix`) must provide, or the suite fails:
+- `util-linux` on PATH (`setsid`/`unshare`, packages/utils ptree tests);
+- HOME no longer than 27 characters (tui task-progress-render asserts
+  `$HOME/private/file` survives a 40-column preview); the workDir is
+  `/var/lib/containers/omp`;
+- `RestrictSUIDSGID=false` (edit-tool-details chmods a fixture to 04750);
+- `services.envfs.enable` so FHS paths (`/bin/bash`, `/usr/bin/<tool>`) in
+  upstream fixtures resolve; `bash-interactive.test.ts` only runs when
+  `/bin/bash` exists.
+
+dotfiles' `.github/workflows/bump-omp.yml` picks up a new `john` daily at
+07:47 UTC. It builds omp through the dotfiles flake, pushes it to attic, then
+commits the lock.
+
 ## Notes for the Nix consumer
 
 18.15+ added `update.auto` (background self-update). `canSelfUpdate()` returns
