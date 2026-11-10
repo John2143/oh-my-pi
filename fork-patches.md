@@ -94,6 +94,24 @@ machine with envfs.
 **Worth upstreaming**: the `locate()` change is a real portability fix for any
 `execve`-only filesystem; the dev-shell one is NixOS-specific.
 
+## Patch 5: wait for the prompt before typing ^D (`zle_pty.rs`)
+
+**Why**: `eof_on_an_empty_line_exits` typed ^D the moment obash was spawned.
+While the terminal is still canonical, the line discipline turns that ^D into a
+zero-byte EOF marker, which is lost when ZLE switches the terminal to raw mode,
+so the shell sat at its prompt until the 10 s timeout. It fails every run when
+the test runs alone, on office and on the runner, so load is not the cause. A
+pty driver hung 2/2 with no delay, and exited every time after ≥50 ms. Upstream
+CI never sees it because the Rust chunk self-skips on `main`.
+
+**Fix**: wait for the prompt on screen before typing ^D, as a user would.
+
+**Verified by**: 30/30 exits in a standalone pty driver after a prompt wait, and
+`cargo nextest run -p pi-shell --test zle_pty -E 'test(eof_on_an_empty_line_exits)'`
+5/5 (70 ms each; 10.4 s timeout before).
+
+**Worth upstreaming**: yes — a test race, not a fork preference.
+
 ## No Longer Carried
 
 - **Nix build system** — upstream ships `flake.nix`, `nix/package.nix`, `nix/bun.nix`, `nix/dev-shell.nix`, `nix/home-manager.nix`, `nix/nixos-module.nix` and exposes `packages.<system>.omp`, so the dotfiles wrapper resolves against upstream's own derivation. The old `nix/omp.nix` + `#private`-field sed workarounds for bun 1.3.13 are obsolete.
