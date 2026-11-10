@@ -3495,6 +3495,10 @@ mod testing {
 			return match std::fs::metadata(&path) {
 				Ok(metadata) if metadata.is_dir() => Err(io::ErrorKind::PermissionDenied.into()),
 				Ok(_) => Ok(path),
+				// envfs (NixOS `/bin`) answers execve for `/bin/<tool>` but not
+				// stat(2), so a failed stat does not mean a missing program: hand
+				// the path to the spawn, which reports ENOENT if it truly is.
+				Err(error) if error.kind() == io::ErrorKind::NotFound => Ok(path),
 				Err(error) => Err(error),
 			};
 		}
