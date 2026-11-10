@@ -38,7 +38,7 @@ The fork carries three patches. Everything else the fork used to ship was either
 
 **Port note**: the first attempt guarded `flush()` itself; that widens a documented contract and breaks the upstream rejection tests, so the guard belongs at the UI call site instead.
 
-## Patch 3: `%%bash` resolution on non-FHS layouts (`51c2abe7bb`)
+## Patch 3: NixOS portability (`51c2abe7bb`, `bf688a4e4c`)
 
 **Why**: `_resolve_bash()` in `packages/coding-agent/src/eval/py/runner.py` returned
 the hardcoded `/bin/bash` on every non-Windows host. NixOS has no `/bin/bash` (only
@@ -48,6 +48,10 @@ streaming` then failed with "Received: undefined" rather than a useful message.
 Hosted runners are FHS, so upstream CI never sees it.
 
 **Fix**: `shutil.which("bash") or "/bin/bash"` — PATH first, FHS path as fallback.
+The same commit set also fixes a test fixture: `browser-attach.test.ts` wrote a
+distro-wrapper script with a `#!/bin/bash` shebang, so spawning it failed with
+ENOENT before the wrapper could exec. It now uses `#!/usr/bin/env bash`, matching
+the fixtures in `config-value-fd-inheritance.test.ts`.
 
 **Worth upstreaming**: this is a genuine portability bug, not a fork preference.
 Verified by running `packages/coding-agent/test/eval/py/runner-shell-output.test.ts`
