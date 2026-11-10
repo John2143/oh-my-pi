@@ -57,6 +57,33 @@ the fixtures in `config-value-fd-inheritance.test.ts`.
 Verified by running `packages/coding-agent/test/eval/py/runner-shell-output.test.ts`
 on NixOS: 2 failing cases before, 7/7 after.
 
+## Patch 4: FHS programs on a stat-blind /bin
+
+**Why**: NixOS has no FHS `/bin`. `services.envfs` (dotfiles, the `github` runner
+VM) serves `/bin/<tool>` for `execve` by resolving `<tool>` in the *requesting*
+process's `PATH`, and falls back to a directory of the common tools when the
+process has no `PATH` at all. Two gaps survived, both only reachable from the
+Rust suite (`bun run test` runs `cargo nextest` as one more chunk):
+- `pi-builtins`' command runner `stat(2)`ed an absolute `argv[0]` before
+  spawning it. envfs answers `execve`, never `stat`, so `/bin/pwd` — find's
+  `-exec` fixture, `find::tests::exec_uses_shell_cwd_and_captures_child_stdout`
+  — read as missing and the test failed with "Failed to run /bin/pwd: No such
+  file or directory" without ever spawning anything.
+- `pi-vcs`' git-runner fixtures assert their process group with
+  `alias.pgid=!ps -o pgid= -p $$`, and the dev shell had no `procps`, so git's
+  shell answered "ps: command not found".
+
+**Fix**: `locate()` now treats a `NotFound` stat on a name containing `/` as
+"let the spawn decide": the spawn reports the same ENOENT when the program
+really is absent, so nothing is masked. `procps` joins the dev shell packages.
+
+**Verified by**: `cargo nextest run -p pi-builtins -E 'test(exec_uses_shell_cwd)'`
+and the `pi-vcs` git-runner tests on the `github` runner VM, which is the only
+machine with envfs.
+
+**Worth upstreaming**: the `locate()` change is a real portability fix for any
+`execve`-only filesystem; the dev-shell one is NixOS-specific.
+
 ## No Longer Carried
 
 - **Nix build system** — upstream ships `flake.nix`, `nix/package.nix`, `nix/bun.nix`, `nix/dev-shell.nix`, `nix/home-manager.nix`, `nix/nixos-module.nix` and exposes `packages.<system>.omp`, so the dotfiles wrapper resolves against upstream's own derivation. The old `nix/omp.nix` + `#private`-field sed workarounds for bun 1.3.13 are obsolete.
@@ -110,8 +137,11 @@ dotfiles `nixos/github-configuration.nix`) must provide, or the suite fails:
   `/var/lib/containers/omp`;
 - `RestrictSUIDSGID=false` (edit-tool-details chmods a fixture to 04750);
 - `services.envfs.enable` so FHS paths (`/bin/bash`, `/usr/bin/<tool>`) in
-  upstream fixtures resolve; `bash-interactive.test.ts` only runs when
-  `/bin/bash` exists.
+  upstream fixtures resolve, with `extraFallbackPathCommands` carrying
+  coreutils/procps for the Rust fixtures that spawn `/bin/sh -c '/bin/sleep …'`
+  under an empty environment. envfs answers `execve` but not `stat`, which is
+  why Patch 4 exists; `bash-interactive.test.ts` only runs when `/bin/bash`
+  exists.
 
 dotfiles' `.github/workflows/bump-omp.yml` picks up a new `john` daily at
 07:47 UTC. It builds omp through the dotfiles flake, pushes it to attic, then
