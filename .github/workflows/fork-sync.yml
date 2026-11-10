@@ -35,9 +35,11 @@ env:
   OMP_TEST_TIMEOUT: "120"
   # CI runs test chunks one at a time and stops at the first failure unless this
   # is set (scripts/ci-test-ts.ts: `pooled = ... (!isCI() || explicitConcurrency)`).
-  # Pooled, every failing chunk is collected into one report. 8 chunks at roughly
-  # 1 GB each fits the 40 GB runner VM alongside its other runners.
-  OMP_TEST_CONCURRENCY: "8"
+  # Pooled, every failing chunk is collected into one report. The 111-chunk
+  # native/tooling/browser bucket dominates wall clock, so 16 slots halve it;
+  # each chunk is one bun process (~1 GB, ~1 core), and the VM is 40 cores with
+  # the org runners sharing it — do not go much past this.
+  OMP_TEST_CONCURRENCY: "16"
   # Per-chunk watchdog (scripts/ci-test-ts.ts chunkTimeoutMs, default 600). The
   # Rust chunk is one pooled command that compiles the whole workspace before
   # nextest starts: ~10 min cold, because checkout's `git clean` drops target/.
