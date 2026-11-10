@@ -203,7 +203,13 @@ fn eof_on_an_empty_line_exits() {
 		Ok(p) => p,
 		Err(e) => panic!("spawn failed: {e}"),
 	};
-	let r = keys(&mut pty, "\x04").and_then(|()| pty.wait(TIMEOUT));
+	// A ^D typed while the terminal is still canonical becomes a zero-byte EOF
+	// marker in the line discipline, which is lost when ZLE switches to raw
+	// mode: wait for the prompt, as a user would, before typing it.
+	let r = pty
+		.wait_screen_contains(">", TIMEOUT)
+		.and_then(|()| keys(&mut pty, "\x04"))
+		.and_then(|()| pty.wait(TIMEOUT));
 	match r {
 		Ok(status) => assert_eq!(status.code(), Some(0)),
 		Err(e) => panic!("shell did not exit on ^D: {e}"),
