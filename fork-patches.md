@@ -171,9 +171,10 @@ dotfiles `nixos/github-configuration.nix`) must provide, or the suite fails:
   why Patch 4 exists; `bash-interactive.test.ts` only runs when `/bin/bash`
   exists.
 
-dotfiles' `.github/workflows/bump-omp.yml` picks up a new `john` daily at
-07:47 UTC. It builds omp through the dotfiles flake, pushes it to attic, then
-commits the lock.
+Nothing bumps dotfiles' `oh-my-pi` input automatically: `scripts/fleet-patch.sh`
+moves it with the rest of the weekly inputs (`nix flake update … oh-my-pi`), and
+the host that first builds the new omp pushes it to attic through attic's
+post-build hook, so every other host substitutes it.
 
 ## Notes for the Nix consumer
 
