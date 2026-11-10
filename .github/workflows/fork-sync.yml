@@ -4,8 +4,8 @@ name: Fork sync
 # the repo's own typecheck and full test suite, then pushes it so the dotfiles
 # flake input (`github:John2143/oh-my-pi/john`) can bump.
 #
-# Scheduled workflows only run from the default branch, so this file lives on
-# `main`; `john` carries the patches (see fork-patches.md).
+# Scheduled workflows only run from the default branch, which for this fork is
+# `john`, so the workflow lives on `john` next to the patches (fork-patches.md).
 #
 # Runner: the self-hosted `github` VM (label `nixos`). Every step runs inside
 # `nix develop .#default`, which is where bun, cargo, cargo-nextest and the
@@ -13,7 +13,7 @@ name: Fork sync
 
 on:
   schedule:
-    # Daily, off-peak for the home fleet (fleet-patch runs Sunday 04:00).
+    # Daily; dotfiles' bump-omp workflow picks up the result at 07:47 UTC.
     - cron: "17 5 * * *"
   workflow_dispatch:
     inputs:
@@ -33,6 +33,11 @@ concurrency:
 env:
   # scripts/ci-test-ts.ts per-test ceiling, same value upstream CI uses.
   OMP_TEST_TIMEOUT: "120"
+  # CI runs test chunks one at a time and stops at the first failure unless this
+  # is set (scripts/ci-test-ts.ts: `pooled = ... (!isCI() || explicitConcurrency)`).
+  # Pooled, every failing chunk is collected into one report. 8 chunks at roughly
+  # 1 GB each fits the 40 GB runner VM alongside its other runners.
+  OMP_TEST_CONCURRENCY: "8"
   UPSTREAM_REPO: https://github.com/can1357/oh-my-pi.git
   UPSTREAM_BRANCH: main
   FORK_BRANCH: john
@@ -45,7 +50,7 @@ jobs:
     runs-on: [self-hosted, nixos]
     timeout-minutes: 300
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
         with:
           ref: ${{ env.FORK_BRANCH }}
           fetch-depth: 0
@@ -94,7 +99,7 @@ jobs:
 
       - name: Cache bun installs
         if: steps.rebase.outputs.changed == 'yes'
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.bun/install/cache
           key: bun-${{ runner.os }}-${{ hashFiles('bun.lock') }}
@@ -124,7 +129,7 @@ jobs:
         # A conflict fails the rebase step, so `failure()` covers both a moved
         # patch anchor and a failed gate; the output only tailors the message.
         if: failure()
-        uses: actions/github-script@v7
+        uses: actions/github-script@v9
         env:
           NTFY_TOPIC_URL: ${{ secrets.NTFY_TOPIC_URL }}
         with:
