@@ -1685,7 +1685,11 @@ def _magic_run(args: str) -> None:
 
 def _resolve_bash() -> str:
     if os.name != "nt":
-        return "/bin/bash"
+        # FHS hosts always have /bin/bash; NixOS and other non-FHS layouts only
+        # ship /bin/sh, so resolve from PATH first and keep the FHS path as the
+        # fallback. Without this, every %%bash cell fails with FileNotFoundError
+        # on Nix.
+        return shutil.which("bash") or "/bin/bash"
     # Prefer Git Bash over WSL's System32 bash.exe, which runs inside a
     # separate Linux environment and does not share the Windows filesystem
     # layout or PATH.
