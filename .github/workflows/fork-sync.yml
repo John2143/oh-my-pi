@@ -18,7 +18,7 @@ name: Fork sync
 
 on:
   schedule:
-    # Daily; dotfiles' bump-omp workflow picks up the result at 07:47 UTC.
+    # Daily, 17 minutes after the nix GC above (see the note at the top of env).
     - cron: "17 5 * * *"
   workflow_dispatch:
     inputs:
