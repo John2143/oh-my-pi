@@ -1,11 +1,11 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` tip (`83774c81bc`, 2026-11-09, version 18.18.2 plus 53 commits). This documents every change we maintain, why it exists, and where to find it.
+Rebased onto `upstream/main` tip (`c308970263`, 2026-11-12, version 18.20.0). This documents every change we maintain, why it exists, and where to find it.
 
 
-The fork carries three patches. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
+The fork carries five patches in seven commits. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
 
-## Patch 1: exit_loop_mode Tool (`575efc857a`)
+## Patch 1: exit_loop_mode Tool (`ab0bf55501`)
 
 **Why**: Upstream's `/loop` mode auto-repeats a prompt but the agent has no way to stop on its own — only the user can exit (Esc or `/loop` again). Our skills (`web-researcher`, `security-engineer`) run inside `/loop` and need to end the loop themselves once the work is verifiably complete, so the agent gets a tool for it.
 
@@ -28,7 +28,7 @@ The fork carries three patches. Everything else the fork used to ship was either
 
 **Port notes vs the 16.3.11 version** (`74ac4a051`): v18 declares `disableLoopMode` synchronous across ~6 call sites, so it was not ported to async — deactivation is fire-and-forget there and the tool's own guard covers the gap. Activation is awaited instead, because `setActiveToolsByName` drops unknown names and a raced activation would hide the tool during iteration 1. Registration is eager rather than lazy: it runs before the blanket `ExtensionToolWrapper` pass, so the entry gets the approval gate like every other built-in.
 
-## Patch 2: read-only config in setup scenes (`e40e18ff02`)
+## Patch 2: read-only config in setup scenes (`e1f26ef53a`)
 
 **Why**: `Settings.flush()` rethrows write failures by contract — the upstream settings tests assert rejections for `ELOOP`, `ENOTDIR` and invalid configs — and all three setup-scene flushes awaited it unguarded. A home-manager-managed `config.yml` is a symlink into the read-only nix store, so finishing the setup wizard rejected with `EROFS` and the TUI reported it as an unhandled rejection (the write lands next to the *resolved* target, i.e. inside `/nix/store`). Selectors and the session-move path already catch this and show a clean error; only the wizard was unguarded.
 
@@ -38,7 +38,7 @@ The fork carries three patches. Everything else the fork used to ship was either
 
 **Port note**: the first attempt guarded `flush()` itself; that widens a documented contract and breaks the upstream rejection tests, so the guard belongs at the UI call site instead.
 
-## Patch 3: NixOS portability (`51c2abe7bb`, `bf688a4e4c`)
+## Patch 3: NixOS portability (`9e5b9d7e3e`, `699e902907`)
 
 **Why**: `_resolve_bash()` in `packages/coding-agent/src/eval/py/runner.py` returned
 the hardcoded `/bin/bash` on every non-Windows host. NixOS has no `/bin/bash` (only
@@ -57,7 +57,7 @@ the fixtures in `config-value-fd-inheritance.test.ts`.
 Verified by running `packages/coding-agent/test/eval/py/runner-shell-output.test.ts`
 on NixOS: 2 failing cases before, 7/7 after.
 
-## Patch 4: FHS programs on a stat-blind /bin
+## Patch 4: FHS programs on a stat-blind /bin (`97e57ecf3d`, `53b28a7220`)
 
 **Why**: NixOS has no FHS `/bin`. `services.envfs` (dotfiles, the `github` runner
 VM) serves `/bin/<tool>` for `execve` by resolving `<tool>` in the *requesting*
@@ -94,7 +94,7 @@ machine with envfs.
 **Worth upstreaming**: the `locate()` change is a real portability fix for any
 `execve`-only filesystem; the dev-shell one is NixOS-specific.
 
-## Patch 5: wait for the prompt before typing ^D (`zle_pty.rs`)
+## Patch 5: wait for the prompt before typing ^D (`538a8deff9`)
 
 **Why**: `eof_on_an_empty_line_exits` typed ^D the moment obash was spawned.
 While the terminal is still canonical, the line discipline turns that ^D into a
@@ -122,30 +122,40 @@ CI never sees it because the Rust chunk self-skips on `main`.
 
 ## Replay Instructions
 
-The branch is a plain rebase of three fork commits onto `upstream/main`:
+The branch is a plain rebase of 20 fork commits onto `upstream/main` — seven
+patches plus the CI and docs commits that record them:
 
 ```bash
 git fetch upstream main
-git checkout -B john upstream/main
-git log --oneline upstream/main..origin/john   # the fork commits, oldest first
-git cherry-pick <exit_loop_mode> <read-only-setup-config> <bash-from-path>
+git rebase upstream/main                              # what fork-sync runs; manual only on conflict
+git log --oneline --reverse upstream/main..origin/john # 20 commits, oldest first
 ```
 
-That is exactly what `.github/workflows/fork-sync.yml` does on a schedule
-(`git rebase upstream/main`), so a clean upstream bump needs no manual replay at
-all — only a conflict does.
+Because the tip is rebased, every hash in this file moves on each upstream bump:
+identify the patch commits by subject (`feat(coding-agent): add exit_loop_mode`,
+`fix(setup)`, `fix(eval)`, `test(browser-attach)`, `test(nixos)`, `fix(shell)`,
+`test(zle)`), not by the hashes above.
 
-The `exit_loop_mode` patch conflicts on the import block of
-`packages/coding-agent/src/modes/controllers/event-controller.ts` whenever
-upstream reshapes that block: keep upstream's imports and append
-`import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";`.
+The `exit_loop_mode` patch conflicts in two places when upstream reshapes them:
+
+- the import block of `packages/coding-agent/src/modes/controllers/event-controller.ts`
+  — keep upstream's imports and add
+  `import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";` beside
+  the other `../../tools/` imports (at the `c308970263` replay: directly after
+  `import { writeDeviceDispatch } from "../../tools/resolve";`);
+- `packages/coding-agent/src/tools/builtin-names.ts` — upstream added the
+  `BUILTIN_TOOL_HELP` map keyed by `BuiltinToolName`; keep it verbatim and only
+  extend `HIDDEN_TOOL_NAMES` with `"exit_loop_mode"`. A hidden tool needs no help
+  entry: `test/tools/builtin-defaults.test.ts` walks `BUILTIN_TOOL_NAMES` only.
 
 Expect the same class of conflict on a later upstream: the anchors are
 `HIDDEN_TOOL_NAMES`, `HIDDEN_TOOLS`, the `toolSession` literal, the eager `goal`
 registration block, `requestedActiveToolNames`, `AgentSession`'s mode-state
-accessors, `#enableLoopMode`/`disableLoopMode`, and `#handleToolExecutionEnd`.
-The setup patch anchors are the three `ctx.settings.flush()` call sites plus
-`markSetupWizardComplete` in `modes/setup.ts`.
+accessors, `#enableLoopMode`/`disableLoopMode`, and `#handleToolExecutionEnd` —
+the behaviour block is that method's last statement, immediately above its
+closing brace and `async #handleAgentEnd`. The setup patch anchors are the three
+`ctx.settings.flush()` call sites plus `markSetupWizardComplete` in
+`modes/setup.ts`.
 
 ## Fork-only CI (`.github/workflows/fork-sync.yml`)
 
