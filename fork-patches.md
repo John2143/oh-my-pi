@@ -182,6 +182,9 @@ attention" issue. A manual `force=true` dispatch re-verifies the current tip.
 
 The self-hosted runner (`github-runner-oh-my-pi` on the `github` VM,
 dotfiles `nixos/github-configuration.nix`) must provide, or the suite fails:
+- `perl` on the suite's PATH (`agent-session-bash-session-ownership` builds its
+  pid-publishing child with `perl -e`); the workflow supplies it from the
+  flake's nixpkgs, because the runner's service PATH has no perl;
 - `util-linux` on PATH (`setsid`/`unshare`, packages/utils ptree tests);
 - HOME no longer than 27 characters (tui task-progress-render asserts
   `$HOME/private/file` survives a 40-column preview); the workDir is
