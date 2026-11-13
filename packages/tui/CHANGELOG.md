@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- A skill card chips every skill a draft invoked and reports the combined prompt size (`2 skills · 41 lines`)
+
 ## [18.20.0] - 2026-11-12
 
 ### Added

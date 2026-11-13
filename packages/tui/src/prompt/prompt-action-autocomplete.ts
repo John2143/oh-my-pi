@@ -22,7 +22,7 @@ import {
 	isModelMentionPrefix,
 	type ModelMentionCandidateSource,
 } from "./model-mention-autocomplete";
-import { subsequenceMatch, subsequenceScore } from "../autocomplete";
+import { type InlineNamespace, subsequenceMatch, subsequenceScore } from "../autocomplete";
 
 let emojiAutocompleteEnabled = true;
 
@@ -53,6 +53,8 @@ interface PromptActionAutocompleteOptions {
 	internalUrlCaller?: () => InternalUrlCallerContext;
 	/** Session-scoped models available for `^` mentions. */
 	modelMentions?: ModelMentionCandidateSource;
+	/** `/agent:`, `/model:`, `/local:` hint tokens completed inline. */
+	namespaces?: readonly InlineNamespace[];
 	keybindings: KeybindingsManager;
 	copyCurrentLine: () => void;
 	copyPrompt: () => void;
@@ -123,9 +125,10 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		commandUsage?: (name: string) => number,
 		internalUrlCaller?: () => InternalUrlCallerContext,
 		modelMentions?: ModelMentionCandidateSource,
+		namespaces?: readonly InlineNamespace[],
 	) {
 		this.#commands = commands;
-		this.#baseProvider = new CombinedAutocompleteProvider(commands, basePath, { commandUsage });
+		this.#baseProvider = new CombinedAutocompleteProvider(commands, basePath, { commandUsage, namespaces });
 		this.#internalUrlCaller = internalUrlCaller ?? (() => ({ cwd: basePath }));
 		this.#modelMentions = modelMentions;
 		this.#actions = actions;
@@ -140,6 +143,11 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	): Promise<{ items: AutocompleteItem[]; prefix: string } | null> {
 		if (signal?.aborted) return null;
 		const textBeforeCursor = (lines[cursorLine] || "").slice(0, cursorCol);
+		// Hint tokens outrank mentions and prompt actions: the token is prose, so
+		// nothing else in this draft may claim the cursor.
+		if (this.#baseProvider.isNamespaceToken(textBeforeCursor)) {
+			return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol, signal, onPartial);
+		}
 		if (!this.#outranksModelMention(lines, cursorLine, textBeforeCursor)) {
 			const modelMention = getModelMentionSuggestions(textBeforeCursor, this.#modelMentions);
 			if (modelMention.kind === "matched") return modelMention.suggestions;
@@ -291,6 +299,15 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		if (!emojiAutocompleteEnabled) return null;
 		return tryEmojiInlineReplace(textBeforeCursor);
 	}
+	isNamespaceToken(textBeforeCursor: string): boolean {
+		return this.#baseProvider.isNamespaceToken(textBeforeCursor);
+	}
+	isNamespaceValue(value: string): boolean {
+		return this.#baseProvider.isNamespaceValue(value);
+	}
+	matchesNamespaceQuery(textBeforeCursor: string, value: string): boolean {
+		return this.#baseProvider.matchesNamespaceQuery(textBeforeCursor, value);
+	}
 }
 
 export function createPromptActionAutocompleteProvider(
@@ -356,5 +373,6 @@ export function createPromptActionAutocompleteProvider(
 		options.commandUsage,
 		options.internalUrlCaller,
 		options.modelMentions,
+		options.namespaces,
 	);
 }

@@ -74,6 +74,9 @@ Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read
 {{/each}}
 {{/has}}
 
+# Hint tokens
+`/agent:<name>`, `/model:<selector>`, and `/local:<path>` inside a user request are hints about how to answer, not commands: `/agent:<name>` asks you to spawn that agent (task tool `agent`), `/model:<selector>` asks you to use that model (`provider/id`, optional trailing `:<thinking-level>`), and `/local:<path>` names the session file `local://<path>`. Never treat them as slash commands, never report "unknown command", and say so plainly when one cannot be honored.
+
 {{#if toolInfo.length}}
 {{#if toolListMode}}
 # Tool Inventory

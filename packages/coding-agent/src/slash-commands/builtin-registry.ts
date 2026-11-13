@@ -146,11 +146,9 @@ export async function executeBuiltinSlashCommand(
 	text: string,
 	runtime: BuiltinSlashCommandRuntime,
 ): Promise<string | boolean> {
-	const parsed = parseSlashCommand(text);
-	if (!parsed) return false;
-
-	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
-	if (!command) return false;
+	const resolved = resolveBuiltinInvocation(text);
+	if (!resolved) return false;
+	const { command, parsed } = resolved;
 	if (parsed.args.length > 0 && !command.allowArgs) {
 		return false;
 	}
@@ -202,6 +200,25 @@ export async function executeBuiltinSlashCommand(
 /** Look up a unified spec by name or alias. Used by the ACP dispatcher. */
 export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | undefined {
 	return BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
+}
+
+/**
+ * Resolve `text` to a builtin command, honoring colon-form arguments only for
+ * commands that declare them (`aliases: ["force:"]`). `/local x` runs the
+ * command; `/local:x` is a hint in prose, because a bare `/local:` reads as the
+ * `/local:` namespace and must reach the model instead of opening `$EDITOR`.
+ */
+export function resolveBuiltinInvocation(
+	text: string,
+): { command: SlashCommandSpec; parsed: ParsedSlashCommand } | undefined {
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return undefined;
+	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
+	if (!command) return undefined;
+	if (text.startsWith(`/${parsed.name}:`) && !(command.aliases ?? []).includes(`${parsed.name}:`)) {
+		return undefined;
+	}
+	return { command, parsed };
 }
 
 export type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime };
