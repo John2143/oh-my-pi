@@ -1,6 +1,9 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` tip (`c308970263`, 2026-11-12, version 18.20.0). This documents every change we maintain, why it exists, and where to find it.
+Rebased onto `upstream/main` (version 18.20.0 at the time of writing). `fork-sync`
+moves the base forward daily and rewrites every commit hash below, so read the
+hashes and line hints here as "as of the last hand rebase" — the current tip is
+whatever `git log -1 origin/john` and the last green run say. This documents every change we maintain, why it exists, and where to find it.
 
 
 The fork carries five patches in seven commits. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
@@ -141,8 +144,8 @@ The `exit_loop_mode` patch conflicts in two places when upstream reshapes them:
 - the import block of `packages/coding-agent/src/modes/controllers/event-controller.ts`
   — keep upstream's imports and add
   `import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";` beside
-  the other `../../tools/` imports (at the `c308970263` replay: directly after
-  `import { writeDeviceDispatch } from "../../tools/resolve";`);
+  the other `../../tools/` imports — at the last hand rebase that landed directly
+  after `import { writeDeviceDispatch } from "../../tools/resolve";`;
 - `packages/coding-agent/src/tools/builtin-names.ts` — upstream added the
   `BUILTIN_TOOL_HELP` map keyed by `BuiltinToolName`; keep it verbatim and only
   extend `HIDDEN_TOOL_NAMES` with `"exit_loop_mode"`. A hidden tool needs no help
