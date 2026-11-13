@@ -8,6 +8,12 @@
 export const SKILL_TOKEN_RE = /(^|\s)\/skill:([^\s/]+(?:\/[^\s/]+)?)(?=\s|$)/g;
 
 /**
+ * Leading slash namespaces that are advisory hints in prose, never commands:
+ * the model reads them, nothing is dispatched locally.
+ */
+export const HINT_TOKEN_PREFIXES = ["/agent:", "/model:", "/local:"] as const;
+
+/**
  * Whether the (already left-trimmed) draft begins with a TUI local-execution
  * sigil that downstream branches consume verbatim.
  */
@@ -28,7 +34,8 @@ function startsWithLocalExecutionPrefix(trimmedStart: string): boolean {
 export function allowsSkillTokens(text: string): boolean {
 	const trimmedStart = text.trimStart();
 	if (trimmedStart.startsWith("/skill:")) return true;
-	if (trimmedStart.startsWith("/")) return false;
+	// A draft may open with a hint token and still carry skill tokens further in.
+	if (trimmedStart.startsWith("/")) return HINT_TOKEN_PREFIXES.some(prefix => trimmedStart.startsWith(prefix));
 	return !startsWithLocalExecutionPrefix(trimmedStart);
 }
 

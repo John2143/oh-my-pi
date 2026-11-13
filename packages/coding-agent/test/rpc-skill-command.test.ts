@@ -2,7 +2,8 @@ import { describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildSkillPromptMessage, renderSkillPromptMessage } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { renderUserSkillPrompts } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildUserSkillPromptsForTest } from "./helpers/skill-prompts";
 import { dispatchRpcSkillPrompt, tryRunRpcSkillCommand } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-mode";
 import {
 	RpcExtensionUserMessageTracker,
@@ -12,8 +13,8 @@ import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-codi
 import { removeWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
 
 const skillPromptBuilder = {
-	buildUserSkillPrompt: buildSkillPromptMessage,
-	renderUserSkillPrompt: renderSkillPromptMessage,
+	buildUserSkillPrompts: buildUserSkillPromptsForTest,
+	renderUserSkillPrompts,
 };
 
 describe("tryRunRpcSkillCommand", () => {
@@ -52,6 +53,63 @@ describe("tryRunRpcSkillCommand", () => {
 		expect(message?.display).toBe(true);
 		expect(message?.attribution).toBe("user");
 		expect(options).toEqual({ streamingBehavior: "steer", queueChipText: "/skill:reviewer focus on risks" });
+
+		await removeWithRetries(dir);
+	});
+
+	test("dispatches a draft naming several skills as one message carrying every body", async () => {
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), `omp-rpc-skill-${Snowflake.next()}-`));
+		const alphaDir = path.join(dir, "alpha");
+		const betaDir = path.join(dir, "beta");
+		await fs.mkdir(alphaDir);
+		await fs.mkdir(betaDir);
+		await Bun.write(
+			path.join(alphaDir, "SKILL.md"),
+			"---\nname: alpha\ndescription: Alpha\n---\n\nAlpha instructions.\n",
+		);
+		await Bun.write(
+			path.join(betaDir, "SKILL.md"),
+			"---\nname: beta\ndescription: Beta\n---\n\nBeta instructions.\n",
+		);
+
+		let messages = 0;
+		let message: Pick<CustomMessage, "attribution" | "content" | "customType" | "details" | "display"> | undefined;
+
+		const handled = await tryRunRpcSkillCommand(
+			{
+				...skillPromptBuilder,
+				skillsSettings: { enableSkillCommands: true },
+				skills: [
+					{
+						name: "alpha",
+						description: "Alpha",
+						filePath: path.join(alphaDir, "SKILL.md"),
+						baseDir: alphaDir,
+						source: "project",
+					},
+					{
+						name: "beta",
+						description: "Beta",
+						filePath: path.join(betaDir, "SKILL.md"),
+						baseDir: betaDir,
+						source: "project",
+					},
+				],
+				async promptCustomMessage(nextMessage: typeof message) {
+					messages += 1;
+					message = nextMessage;
+					return true;
+				},
+			},
+			"fix auth /skill:alpha and /skill:beta",
+		);
+
+		expect(handled).toEqual({ agentInvoked: true });
+		expect(messages).toBe(1);
+		expect(message?.content).toContain("Alpha instructions.");
+		expect(message?.content).toContain("Beta instructions.");
+		const details = message?.details as { skills?: readonly { name: string }[] } | undefined;
+		expect(details?.skills?.map(entry => entry.name)).toEqual(["alpha", "beta"]);
 
 		await removeWithRetries(dir);
 	});
