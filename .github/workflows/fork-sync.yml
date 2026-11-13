@@ -52,6 +52,10 @@ env:
   OMP_TEST_CHUNK_TIMEOUT: "1800"
   UPSTREAM_REPO: https://github.com/can1357/oh-my-pi.git
   UPSTREAM_BRANCH: main
+  # Upstream's CI workflow for `main`: the rebase targets the newest commit it
+  # passed on (see the rebase step). Given as a file name, not an ID, so it
+  # survives upstream recreating the workflow.
+  UPSTREAM_CI_WORKFLOW: ci.yml
   FORK_BRANCH: john
 
 jobs:
@@ -83,31 +87,51 @@ jobs:
           git remote set-url upstream "$UPSTREAM_REPO"
           git fetch upstream "$UPSTREAM_BRANCH"
 
-          if git merge-base --is-ancestor "upstream/$UPSTREAM_BRANCH" HEAD; then
-            # Scheduled runs stop here: there is nothing new to verify, and the
-            # tip was already gated when it was pushed. A manual `force`
-            # dispatch re-runs the gate against the current tip.
-            if [ "${{ inputs.force }}" != "true" ]; then
-              echo "changed=no" >> "$GITHUB_OUTPUT"
-              echo "Already current with upstream/$UPSTREAM_BRANCH."
+          # Rebase onto upstream's newest *green* commit rather than its tip.
+          # Upstream main is red for hours at a time — 5 of its 8 CI runs before
+          # 2026-11-13 failed on their own lint, catalog or format churn — and a
+          # rebase onto a red commit fails this gate over something the fork
+          # cannot fix (runs 43022810637, 43230463273's successor, 43311399137).
+          # When the tip is green this resolves to the tip, so the fork still
+          # tracks upstream normally.
+          BASE="upstream/$UPSTREAM_BRANCH"
+          SLUG=$(printf '%s' "$UPSTREAM_REPO" | sed -e 's#.*github\.com[:/]##' -e 's#\.git$##')
+          GREEN=$(curl -fsS \
+            "https://api.github.com/repos/$SLUG/actions/workflows/$UPSTREAM_CI_WORKFLOW/runs?branch=$UPSTREAM_BRANCH&status=success&event=push&per_page=1" \
+            | tr ',' '\n' | grep '"head_sha"' | head -1 | sed -e 's/.*"head_sha": *"//' -e 's/".*//' || true)
+          if printf '%s' "$GREEN" | grep -Eq '^[0-9a-f]{40}$' && git cat-file -e "$GREEN^{commit}" 2>/dev/null; then
+            if git merge-base --is-ancestor "$GREEN" HEAD; then
+              # Scheduled runs stop here: there is nothing new to verify, and the
+              # tree was already gated when it was pushed. A manual `force`
+              # dispatch re-runs the gate against it.
+              if [ "${{ inputs.force }}" != "true" ]; then
+                echo "changed=no" >> "$GITHUB_OUTPUT"
+                echo "Already current with $GREEN."
+                exit 0
+              fi
+              echo "Forced: verifying the current tree without a rebase."
+              echo "changed=yes" >> "$GITHUB_OUTPUT"
               exit 0
             fi
-            echo "Forced: verifying the current tip without a rebase."
-            echo "changed=yes" >> "$GITHUB_OUTPUT"
-            exit 0
+            if git merge-base --is-ancestor "$GREEN" "upstream/$UPSTREAM_BRANCH"; then
+              echo "Newest green upstream commit: $GREEN."
+              BASE="$GREEN"
+            fi
+          else
+            echo "No green upstream CI run for $SLUG; falling back to the tip."
           fi
 
-          echo "Behind by $(git rev-list --count "HEAD..upstream/$UPSTREAM_BRANCH") commit(s)."
-          if ! git rebase "upstream/$UPSTREAM_BRANCH"; then
+          echo "Behind $BASE by $(git rev-list --count "HEAD..$BASE") commit(s)."
+          if ! git rebase "$BASE"; then
             git rebase --abort
-            git --no-pager log --oneline -1 "upstream/$UPSTREAM_BRANCH"
+            git --no-pager log --oneline -1 "$BASE"
             echo "changed=conflict" >> "$GITHUB_OUTPUT"
             echo "::error::Rebase conflict — a patch anchor moved. See fork-patches.md#replay-instructions."
             exit 1
           fi
 
           echo "changed=yes" >> "$GITHUB_OUTPUT"
-          git --no-pager log --oneline "upstream/$UPSTREAM_BRANCH"..HEAD
+          git --no-pager log --oneline "$BASE"..HEAD
 
       - name: Cache bun installs
         if: steps.rebase.outputs.changed == 'yes'
