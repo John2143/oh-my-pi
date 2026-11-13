@@ -1,6 +1,9 @@
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
-import { BUILTIN_SLASH_COMMANDS_INTERNAL, lookupBuiltinSlashCommand } from "./builtin-registry";
-import { parseSlashCommand } from "./helpers/parse";
+import {
+	BUILTIN_SLASH_COMMANDS_INTERNAL,
+	lookupBuiltinSlashCommand,
+	resolveBuiltinInvocation,
+} from "./builtin-registry";
 import type { AcpBuiltinSlashCommandResult, SlashCommandRuntime } from "./types";
 
 export type { AcpBuiltinSlashCommandResult } from "./types";
@@ -18,15 +21,16 @@ export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
 /**
  * Whether an extension command named `name` would be captured by ACP builtin
  * dispatch before reaching the extension handler. Beyond exact name/alias
- * collisions, `parseSlashCommand` treats `:` as a name/args separator, so a
- * colon-namespaced name whose prefix is a handled builtin (e.g. `model:foo`)
- * executes the `/model` builtin with `foo` as args. Such names must not be
- * advertised to ACP clients.
+ * collisions, a colon-namespaced name is captured only by a builtin that
+ * declares its colon form (e.g. `force:tool`), because colon arguments are
+ * otherwise hint tokens in prose (`/model:foo` never runs `/model`).
  */
 export function isAcpBuiltinShadowedName(name: string): boolean {
 	if (ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
 	const colon = name.indexOf(":");
-	return colon !== -1 && ACP_BUILTIN_RESERVED_NAMES.has(name.slice(0, colon));
+	if (colon === -1) return false;
+	const base = name.slice(0, colon);
+	return lookupBuiltinSlashCommand(base)?.aliases?.includes(`${base}:`) === true;
 }
 
 /**
@@ -60,10 +64,10 @@ export async function executeAcpBuiltinSlashCommand(
 	text: string,
 	runtime: SlashCommandRuntime,
 ): Promise<AcpBuiltinSlashCommandResult> {
-	const parsed = parseSlashCommand(text);
-	if (!parsed) return false;
-	const command = lookupBuiltinSlashCommand(parsed.name);
-	if (!command?.handle) return false;
+	const resolved = resolveBuiltinInvocation(text);
+	if (!resolved) return false;
+	const { command, parsed } = resolved;
+	if (!command.handle) return false;
 	const result = await command.handle(parsed, runtime);
 	if (result === undefined) return { consumed: true };
 	return result;

@@ -1766,3 +1766,79 @@ describe("Editor autocomplete invalidation on destructive edits (issue #4295)", 
 		expect(submitted).toBe("hello");
 	});
 });
+
+describe("Editor hint-token completion", () => {
+	const namespaces = [
+		{
+			prefix: "agent:",
+			getCompletions: (query: string) => {
+				const lower = query.toLowerCase();
+				return ["oracle", "reviewer", "scout"]
+					.filter(name => name.includes(lower))
+					.map(name => ({ value: `agent:${name}`, label: name }));
+			},
+		},
+		{
+			prefix: "model:",
+			getCompletions: (query: string) => {
+				const lower = query.toLowerCase();
+				return ["deepseek/deepseek-flash", "anthropic/claude-sonnet"]
+					.filter(id => id.includes(lower))
+					.map(id => ({ value: `model:${id}`, label: id }));
+			},
+		},
+	];
+
+	const createHintEditor = (): Editor => {
+		const editor = new Editor(defaultEditorTheme);
+		editor.setAutocompleteProvider(new CombinedAutocompleteProvider([], "/tmp", { namespaces }));
+		return editor;
+	};
+
+	const type = (editor: Editor, text: string): void => {
+		for (const char of text) editor.handleInput(char);
+	};
+
+	it("inserts the hint on Enter instead of submitting the draft", async () => {
+		const editor = createHintEditor();
+		let submitted: string | undefined;
+		editor.onSubmit = text => {
+			submitted = text;
+		};
+
+		const shown = untilAutocompleteShown(editor);
+		type(editor, "/agent:");
+		await shown;
+		const narrowed = onceAutocompleteUpdate(editor);
+		type(editor, "sco");
+		await narrowed;
+
+		editor.handleInput("\r");
+
+		expect(editor.getText()).toBe("/agent:scout ");
+		expect(submitted).toBeUndefined();
+	});
+
+	it("accepts two hint tokens into one draft and keeps the prose between them", async () => {
+		const editor = createHintEditor();
+
+		type(editor, "/agent:sco");
+		await untilAutocompleteShown(editor);
+		editor.handleInput("\t");
+		type(editor, "and /model:flash");
+		await untilAutocompleteShown(editor);
+		editor.handleInput("\t");
+
+		expect(editor.getText()).toBe("/agent:scout and /model:deepseek/deepseek-flash ");
+	});
+
+	it("never opens a hint popup inside another command or local execution", async () => {
+		const commandLine = createHintEditor();
+		type(commandLine, "/compact /agent:");
+		expect(commandLine.isShowingAutocomplete()).toBeFalse();
+
+		const shell = createHintEditor();
+		type(shell, "!echo /agent:");
+		expect(shell.isShowingAutocomplete()).toBeFalse();
+	});
+});
