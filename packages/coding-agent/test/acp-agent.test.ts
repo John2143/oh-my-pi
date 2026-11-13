@@ -13,7 +13,7 @@ import type { ExtensionUIContext } from "@oh-my-pi/pi-coding-agent/extensibility
 import { cfgExtensions } from "@oh-my-pi/pi-coding-agent/extensibility/settings";
 import { ExtensionRuntime } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
-import { buildSkillPromptMessage } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildUserSkillPromptsForTest } from "./helpers/skill-prompts";
 import { resolveLocalUrlToPath } from "@oh-my-pi/pi-coding-agent/internal-urls";
 import * as oauthFlowModule from "@oh-my-pi/pi-coding-agent/mcp/oauth-flow";
 import {
@@ -177,7 +177,7 @@ class FakeAgentSession {
 	customMessageOptions: Array<{ streamingBehavior?: "steer" | "followUp"; queueChipText?: string } | undefined> = [];
 	skillsSettings = { enableSkillCommands: true };
 	skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> = [];
-	buildUserSkillPrompt = buildSkillPromptMessage;
+	buildUserSkillPrompts = buildUserSkillPromptsForTest;
 	async refreshSkillsAndCommands(): Promise<void> {}
 	subscribeCommandMetadataChanged(_listener: () => void): () => void {
 		return () => {};
@@ -2573,8 +2573,45 @@ describe("ACP agent", () => {
 		expect(customMessage.customType).toBe("skill-prompt");
 		expect(customMessage.content).toContain("# Sample\nDo work.");
 		expect(customMessage.content).toContain(`[Skill directory: ${skillDir}]`);
-		expect(customMessage.content).toContain("User: extra context");
+		// The draft reaches the model as typed, so the token stays in the user line.
+		expect(customMessage.content).toContain("User: /skill:sample extra context");
 		expect(session.customMessageOptions[0]).toEqual({ streamingBehavior: "steer" });
+
+		harness.abortController.abort();
+		await Bun.sleep(0);
+	});
+
+	it("attaches every skill a draft names as one custom skill message", async () => {
+		const harness = await createHarness();
+		const created = await harness.agent.newSession({ cwd: harness.cwdA, mcpServers: [] });
+		const session = harness.findSession(created.sessionId);
+		if (!session) throw new Error("expected ACP session to exist after newSession");
+		const skills: Array<{ name: string; description: string; filePath: string; baseDir: string; source: string }> =
+			[];
+		for (const name of ["alpha", "beta"]) {
+			const dir = path.join(harness.cwdA, ".skills", name);
+			const filePath = path.join(dir, "SKILL.md");
+			await fs.promises.mkdir(dir, { recursive: true });
+			await fs.promises.writeFile(filePath, `---\ndescription: ${name} skill\n---\n# ${name}\n${name} work.\n`);
+			skills.push({ name, description: `${name} skill`, filePath, baseDir: dir, source: "test" });
+		}
+		session.skills = skills;
+
+		await harness.agent.prompt({
+			sessionId: created.sessionId,
+			messageId: "00000000-0000-4000-8000-000000000003",
+			prompt: [{ type: "text", text: "fix auth /skill:alpha and /skill:beta" }],
+		} as PromptRequest);
+
+		expect(session.promptCalls).toEqual([]);
+		expect(session.customMessages).toHaveLength(1);
+		const customMessage = session.customMessages[0];
+		if (!customMessage) throw new Error("expected ACP skill prompt custom message");
+		expect(customMessage.content).toContain("alpha work.");
+		expect(customMessage.content).toContain("beta work.");
+		expect(customMessage.content).toContain("User: fix auth /skill:alpha and /skill:beta");
+		const details = customMessage.details as { skills?: readonly { name: string }[] } | undefined;
+		expect(details?.skills?.map(entry => entry.name)).toEqual(["alpha", "beta"]);
 
 		harness.abortController.abort();
 		await Bun.sleep(0);

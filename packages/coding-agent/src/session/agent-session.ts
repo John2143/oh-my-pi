@@ -171,8 +171,9 @@ import type { CustomCommandContext } from "../extensibility/custom-commands/type
 import { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
 import {
 	type BuiltSkillPromptMessage,
+	type LoadedSkillPrompt,
 	loadSkillPrompt,
-	renderSkillPromptMessage,
+	renderUserSkillPrompts as renderSkillPrompts,
 	type Skill,
 	type SkillPromptInput,
 	type SkillRediscoveryHost,
@@ -11490,24 +11491,21 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	/**
-	 * Load a user-invoked skill and authorize model tags in its arguments. A stale skill (its plugin
+	 * Load the user-invoked skills and authorize model tags in the draft. A stale skill (its plugin
 	 * install was replaced or deleted) is read from this session's rediscovered same-named skill.
+	 * Any load failure rejects before a message is sent.
 	 */
-	async buildUserSkillPrompt(
-		skill: Pick<Skill, "name" | "filePath" | "baseDir">,
+	async buildUserSkillPrompts(
+		skills: readonly Pick<Skill, "name" | "filePath" | "baseDir">[],
 		input: SkillPromptInput,
 	): Promise<BuiltSkillPromptMessage> {
-		const loaded = await loadSkillPrompt(skill, this);
-		return this.renderUserSkillPrompt(loaded.skill, input, loaded.body);
+		const loaded = await Promise.all(skills.map(skill => loadSkillPrompt(skill, this)));
+		return this.renderUserSkillPrompts(loaded, input);
 	}
 
-	/** Render an already-loaded skill only after the invoking submission is still current. */
-	renderUserSkillPrompt(
-		skill: Pick<Skill, "name" | "filePath" | "baseDir">,
-		input: SkillPromptInput,
-		body: string,
-	): BuiltSkillPromptMessage {
-		return renderSkillPromptMessage(skill, input, body, "user", {
+	/** Render already-loaded skills only after the invoking submission is still current. */
+	renderUserSkillPrompts(loaded: readonly LoadedSkillPrompt[], input: SkillPromptInput): BuiltSkillPromptMessage {
+		return renderSkillPrompts(loaded, input, {
 			expandUserArgs: args => this.#modelMentions.expandMentions(args),
 		});
 	}

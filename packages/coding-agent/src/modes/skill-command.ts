@@ -1,6 +1,6 @@
 import type { AgentMessage } from "@oh-my-pi/pi-agent-core";
 import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
-import { getSkillSlashCommandName, parseSkillInvocation } from "../extensibility/skills";
+import { getSkillSlashCommandName, parseSkillInvocation, type Skill } from "../extensibility/skills";
 import { type CustomMessage, SKILL_PROMPT_MESSAGE_TYPE, type SkillPromptDetails } from "../session/messages";
 import type { InteractiveModeContext } from "./types";
 
@@ -13,7 +13,7 @@ type SkillCommandHost = Pick<
 	| "optimisticSkillMessagePending"
 	| "restoreDroppedPrompt"
 > & {
-	session: Pick<InteractiveModeContext["session"], "buildUserSkillPrompt" | "promptCustomMessage" | "isStreaming">;
+	session: Pick<InteractiveModeContext["session"], "buildUserSkillPrompts" | "promptCustomMessage" | "isStreaming">;
 };
 
 type SkillPromptMessage = Pick<
@@ -58,11 +58,23 @@ export interface BuiltSkillCommandPrompt {
 	options: SkillPromptOptions;
 }
 
-/** Return true when `text` invokes a registered `/skill:<name>` command. */
+/** Every registered skill named by `names`, in draft order, each attached once. */
+function resolveInvokedSkills(ctx: SkillCommandHost, names: readonly string[]): Skill[] {
+	const resolved: Skill[] = [];
+	const seen = new Set<string>();
+	for (const name of names) {
+		const skill = ctx.skillCommands.get(getSkillSlashCommandName({ name }));
+		if (!skill || seen.has(skill.name)) continue;
+		seen.add(skill.name);
+		resolved.push(skill);
+	}
+	return resolved;
+}
+
+/** Return true when `text` invokes at least one registered `/skill:<name>` command. */
 export function isKnownSkillCommand(ctx: SkillCommandHost, text: string): boolean {
 	const parsed = parseSkillInvocation(text);
-	if (!parsed) return false;
-	return ctx.skillCommands.has(getSkillSlashCommandName({ name: parsed.name }));
+	return parsed !== undefined && resolveInvokedSkills(ctx, parsed.names).length > 0;
 }
 
 /** Build the user-attributed custom message for a registered `/skill:<name>` command. */
@@ -74,10 +86,10 @@ export async function buildSkillCommandPrompt(
 ): Promise<BuiltSkillCommandPrompt | undefined> {
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return undefined;
-	const skill = ctx.skillCommands.get(getSkillSlashCommandName({ name: parsed.name }));
-	if (!skill) return undefined;
+	const skills = resolveInvokedSkills(ctx, parsed.names);
+	if (skills.length === 0) return undefined;
 
-	const built = await ctx.session.buildUserSkillPrompt(skill, parsed);
+	const built = await ctx.session.buildUserSkillPrompts(skills, parsed);
 	const textBlock: TextContent = { type: "text", text: built.message };
 	const promptContent = images && images.length > 0 ? [textBlock, ...images] : built.message;
 

@@ -2,7 +2,8 @@ import { afterEach, describe, expect, it, vi } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildUserSkillPromptsForTest } from "./helpers/skill-prompts";
 import { parseArgs } from "@oh-my-pi/pi-coding-agent/cli/args";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
@@ -101,7 +102,7 @@ describe("system prompt template CLI resolution", () => {
 	});
 });
 
-const skillPromptBuilder = { buildUserSkillPrompt: buildSkillPromptMessage };
+const skillPromptBuilder = { buildUserSkillPrompts: buildUserSkillPromptsForTest };
 
 function createMode(options?: { pendingStart?: boolean; skillCommands?: Map<string, Skill> }) {
 	return {
@@ -347,6 +348,49 @@ describe("submitInteractiveInput", () => {
 				customType: SKILL_PROMPT_MESSAGE_TYPE,
 				attribution: "user",
 			}),
+			expect.anything(),
+		);
+		expect(mode.showError).not.toHaveBeenCalled();
+	});
+
+	it("dispatches a draft naming two skills as one custom message carrying both bodies", async () => {
+		const skillDir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-skill-command-"));
+		cleanupDirs.push(skillDir);
+		const alphaPath = path.join(skillDir, "alpha.md");
+		const betaPath = path.join(skillDir, "beta.md");
+		await fs.writeFile(alphaPath, "---\nname: alpha\n---\nAlpha instructions.\n");
+		await fs.writeFile(betaPath, "---\nname: beta\n---\nBeta instructions.\n");
+		const alpha: Skill = { name: "alpha", description: "", filePath: alphaPath, baseDir: skillDir, source: "test" };
+		const beta: Skill = { name: "beta", description: "", filePath: betaPath, baseDir: skillDir, source: "test" };
+		const mode = createMode({
+			skillCommands: new Map([
+				["skill:alpha", alpha],
+				["skill:beta", beta],
+			]),
+		});
+		const session = {
+			...skillPromptBuilder,
+			prompt: vi.fn(async () => true),
+			promptCustomMessage: vi.fn(async () => true),
+			resume: vi.fn(async () => {}),
+			isStreaming: false,
+		};
+
+		await submitInteractiveInput(mode, session, createInput({ text: "fix auth /skill:alpha and /skill:beta" }));
+
+		expect(session.prompt).not.toHaveBeenCalled();
+		expect(session.promptCustomMessage).toHaveBeenCalledTimes(1);
+		expect(session.promptCustomMessage).toHaveBeenCalledWith(
+			expect.objectContaining({
+				content: expect.stringContaining("Alpha instructions."),
+				details: expect.objectContaining({
+					skills: [expect.objectContaining({ name: "alpha" }), expect.objectContaining({ name: "beta" })],
+				}),
+			}),
+			expect.objectContaining({ queueChipText: "fix auth /skill:alpha and /skill:beta" }),
+		);
+		expect(session.promptCustomMessage).toHaveBeenCalledWith(
+			expect.objectContaining({ content: expect.stringContaining("Beta instructions.") }),
 			expect.anything(),
 		);
 		expect(mode.showError).not.toHaveBeenCalled();

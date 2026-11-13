@@ -445,8 +445,9 @@ function blockHead(block: WrappedTranscriptBlock): BlockHead {
 			return plainHead("advisor", "omp.advisor", "Advisor", tally);
 		}
 		case SKILL_PROMPT_MESSAGE_TYPE: {
-			const name = (message.details as SkillPromptDetails | undefined)?.name?.trim() || "unknown";
-			return plainHead("skill", "omp.skill", "Skill", name);
+			const details = message.details as SkillPromptDetails | undefined;
+			const names = details?.skills?.map(entry => entry.name) ?? [details?.name?.trim() || "unknown"];
+			return plainHead("skill", "omp.skill", "Skill", names.join(" + "));
 		}
 		case LSP_LATE_DIAGNOSTIC_MESSAGE_TYPE: {
 			const files = (message.details as { files?: LateDiagnosticsFile[] } | undefined)?.files ?? [];

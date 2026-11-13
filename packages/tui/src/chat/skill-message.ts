@@ -78,23 +78,27 @@ export class SkillMessageComponent extends Container {
 	override describe(): NativeNode {
 		return this.#native.get([this.#expanded], () => {
 			const details = this.#message.details;
-			const name = details?.name?.trim() || "unknown";
-			const token = skillToken(name);
-			const prompt = details?.prompt ?? (details?.args ? `${token} ${details.args}` : token);
+			const entries = cardEntries(details);
+			const names = entries.map(entry => entry.name);
 			const display = collapseSkillTokens(
-				prompt,
-				candidate => candidate === name,
+				cardDraft(details, entries),
+				candidate => names.includes(candidate),
 				() => {},
 			);
-			const label = skillChipLabel(name);
-			const leading = display.startsWith(label) && /^\s*$/.test(display.charAt(label.length));
-			const draft = leading ? display.slice(label.length).trim() : display;
-			const head: TspSpan[] = [
-				span(label, "customMessageLabel strong", details?.path ? { href: tryFileUri(details.path) } : undefined),
-			];
-			if (typeof details?.lineCount === "number") {
-				head.push(span(`  ${details.lineCount} ${details.lineCount === 1 ? "line" : "lines"}`, "muted"));
-			}
+			const { leading, body } = splitLeadingChips(
+				display,
+				entries.map(entry => skillChipLabel(entry.name)),
+			);
+			const draft = leading ? body : display;
+			const head: TspSpan[] = entries.map((entry, index) =>
+				span(
+					`${index === 0 ? "" : "  "}${skillChipLabel(entry.name)}`,
+					"customMessageLabel strong",
+					entry.path ? { href: tryFileUri(entry.path) } : undefined,
+				),
+			);
+			const size = cardSize(entries);
+			if (size) head.push(span(`  ${size}`, "muted"));
 			const children: NativeChild[] = [];
 			if (draft) children.push(md(draft));
 			const promptText = this.#expanded ? this.#extractText() : "";
@@ -149,21 +153,22 @@ export class SkillMessageComponent extends Container {
 		this.#disclosure?.dispose();
 		this.clear();
 		const details = this.#message.details;
-		const name = details?.name?.trim() || "unknown";
-		const token = skillToken(name);
-		const prompt = details?.prompt ?? (details?.args ? `${token} ${details.args}` : token);
-		// Display-only collapse: only the invoked skill becomes a chip; a second `/skill:` token the
-		// dispatcher ignored stays literal so the transcript never claims a skill that never loaded.
+		const entries = cardEntries(details);
+		const names = entries.map(entry => entry.name);
+		// Display-only collapse: every attached skill becomes a chip; a `/skill:` token the dispatcher
+		// ignored stays literal so the transcript never claims a skill that never loaded.
 		const display = collapseSkillTokens(
-			prompt,
-			candidate => candidate === name,
+			cardDraft(details, entries),
+			candidate => names.includes(candidate),
 			() => {},
 		);
-		const label = skillChipLabel(name);
-		const leading = display.startsWith(label) && /^\s*$/.test(display.charAt(label.length));
+		const { leading, body } = splitLeadingChips(
+			display,
+			entries.map(entry => skillChipLabel(entry.name)),
+		);
 		const bubble: UserBubbleOptions = {
 			imageLinks: this.#imageLinks,
-			skillPath: candidate => (candidate === name ? details?.path : undefined),
+			skillPath: candidate => entries.find(entry => entry.name === candidate)?.path,
 		};
 
 		if (!leading) {
@@ -171,16 +176,14 @@ export class SkillMessageComponent extends Container {
 				summary: new UserMessageComponent(display, bubble),
 				// Prompt extraction and Markdown layout stay lazy: the factory
 				// runs on the first expanded render, reading the current theme.
-				body: () =>
-					new SkillCallout([new Text(this.#header(label, details), 0, 0), ...this.#promptSection(bubble)]),
+				body: () => new SkillCallout([new Text(this.#header(entries), 0, 0), ...this.#promptSection(bubble)]),
 				expanded,
 			});
 			this.addChild(this.#disclosure);
 			return;
 		}
 
-		const body = display.slice(label.length).trim();
-		const children: Component[] = [new Text(this.#header(label, details), 0, 0)];
+		const children: Component[] = [new Text(this.#header(entries), 0, 0)];
 		if (body) children.push(new Spacer(1), this.#markdown(body, bubble));
 		// The prompt disclosure nests inside the one callout so the
 		// skill-colored rail stays continuous across summary and detail.
@@ -215,13 +218,14 @@ export class SkillMessageComponent extends Container {
 		return md;
 	}
 
-	/** Chip linked to its SKILL.md, then the muted prompt size. */
-	#header(label: string, details: SkillPromptDetails | undefined): string {
-		const chip = skillChipStyle(label, bubbleReset());
-		const parts = [details?.path ? fileHyperlink(details.path, chip, { line: 1 }) : chip];
-		if (typeof details?.lineCount === "number") {
-			parts.push(theme.fg("muted", `${details.lineCount} ${details.lineCount === 1 ? "line" : "lines"}`));
-		}
+	/** One chip per attached skill, each linked to its SKILL.md, then the muted prompt size. */
+	#header(entries: readonly SkillCardEntry[]): string {
+		const parts = entries.map(entry => {
+			const chip = skillChipStyle(skillChipLabel(entry.name), bubbleReset());
+			return entry.path ? fileHyperlink(entry.path, chip, { line: 1 }) : chip;
+		});
+		const size = cardSize(entries);
+		if (size) parts.push(theme.fg("muted", size));
 		return parts.join("  ");
 	}
 
@@ -241,6 +245,50 @@ export class SkillMessageComponent extends Container {
 			.map(c => c.text)
 			.join("\n");
 	}
+}
+
+/** One attached skill; `path`/`lineCount` are optional so a pre-multi-skill message still renders. */
+type SkillCardEntry = { name: string; path?: string; lineCount?: number };
+
+/** Skills named by `details.skills`, or the scalar fields of a message recorded before them. */
+function cardEntries(details: SkillPromptDetails | undefined): SkillCardEntry[] {
+	const entries = details?.skills;
+	if (entries && entries.length > 0) return entries.map(entry => ({ ...entry }));
+	return [{ name: details?.name?.trim() || "unknown", path: details?.path, lineCount: details?.lineCount }];
+}
+
+/** The submitted draft, or one token per attached skill when the draft is not recorded. */
+function cardDraft(details: SkillPromptDetails | undefined, entries: readonly SkillCardEntry[]): string {
+	if (details?.prompt !== undefined) return details.prompt;
+	const tokens = entries.map(entry => skillToken(entry.name)).join(" ");
+	return details?.args ? `${tokens} ${details.args}` : tokens;
+}
+
+/**
+ * Drop the leading run of skill chips from the collapsed draft: a draft that
+ * opens with `/skill:` renders as a callout with the remaining prose as its body.
+ */
+function splitLeadingChips(display: string, labels: readonly string[]): { leading: boolean; body: string } {
+	let index = 0;
+	let leading = false;
+	for (;;) {
+		const label = labels.find(candidate => display.startsWith(candidate, index));
+		if (!label) break;
+		const next = index + label.length;
+		if (next < display.length && !/^\s$/.test(display.charAt(next))) break;
+		leading = true;
+		index = next;
+		while (index < display.length && /^\s$/.test(display.charAt(index))) index++;
+	}
+	return { leading, body: display.slice(index).trim() };
+}
+
+/** Muted prompt size across every attached skill (`2 skills · 41 lines`). */
+function cardSize(entries: readonly SkillCardEntry[]): string | undefined {
+	if (!entries.some(entry => typeof entry.lineCount === "number")) return undefined;
+	const lines = entries.reduce((sum, entry) => sum + (entry.lineCount ?? 0), 0);
+	const counted = `${lines} ${lines === 1 ? "line" : "lines"}`;
+	return entries.length === 1 ? counted : `${entries.length} skills · ${counted}`;
 }
 
 /** Bubble foreground + background to re-arm after an inline chip. */
