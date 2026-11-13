@@ -79,6 +79,8 @@ jobs:
       - name: Rebase onto upstream/main
         id: rebase
         shell: bash
+        env:
+          GH_API_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           # A self-hosted workspace keeps .git/config between runs, so the
@@ -86,52 +88,68 @@ jobs:
           git remote get-url upstream >/dev/null 2>&1 || git remote add upstream "$UPSTREAM_REPO"
           git remote set-url upstream "$UPSTREAM_REPO"
           git fetch upstream "$UPSTREAM_BRANCH"
+          TIP="upstream/$UPSTREAM_BRANCH"
+
+          # Nothing to advance to: the tree was gated when it was pushed, so a
+          # scheduled run stops and a forced dispatch re-verifies without a rebase.
+          stop_or_verify() {
+            if [ "${{ inputs.force }}" != "true" ]; then
+              echo "changed=no" >> "$GITHUB_OUTPUT"
+              echo "$1"
+              exit 0
+            fi
+            echo "Forced: verifying the current tree without a rebase."
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
+            exit 0
+          }
 
           # Rebase onto upstream's newest *green* commit rather than its tip.
           # Upstream main is red for hours at a time — 5 of its 8 CI runs before
           # 2026-11-13 failed on their own lint, catalog or format churn — and a
           # rebase onto a red commit fails this gate over something the fork
-          # cannot fix (runs 43022810637, 43230463273's successor, 43311399137).
-          # When the tip is green this resolves to the tip, so the fork still
-          # tracks upstream normally.
-          BASE="upstream/$UPSTREAM_BRANCH"
+          # cannot fix. When the tip is green this resolves to the tip, so the
+          # fork still tracks upstream normally.
           SLUG=$(printf '%s' "$UPSTREAM_REPO" | sed -e 's#.*github\.com[:/]##' -e 's#\.git$##')
-          GREEN=$(curl -fsS \
-            "https://api.github.com/repos/$SLUG/actions/workflows/$UPSTREAM_CI_WORKFLOW/runs?branch=$UPSTREAM_BRANCH&status=success&event=push&per_page=1" \
-            | tr ',' '\n' | grep '"head_sha"' | head -1 | sed -e 's/.*"head_sha": *"//' -e 's/".*//' || true)
-          if printf '%s' "$GREEN" | grep -Eq '^[0-9a-f]{40}$' && git cat-file -e "$GREEN^{commit}" 2>/dev/null; then
-            if git merge-base --is-ancestor "$GREEN" HEAD; then
-              # Scheduled runs stop here: there is nothing new to verify, and the
-              # tree was already gated when it was pushed. A manual `force`
-              # dispatch re-runs the gate against it.
-              if [ "${{ inputs.force }}" != "true" ]; then
-                echo "changed=no" >> "$GITHUB_OUTPUT"
-                echo "Already current with $GREEN."
-                exit 0
-              fi
-              echo "Forced: verifying the current tree without a rebase."
-              echo "changed=yes" >> "$GITHUB_OUTPUT"
-              exit 0
-            fi
-            if git merge-base --is-ancestor "$GREEN" "upstream/$UPSTREAM_BRANCH"; then
-              echo "Newest green upstream commit: $GREEN."
-              BASE="$GREEN"
-            fi
-          else
-            echo "No green upstream CI run for $SLUG; falling back to the tip."
+          URL="https://api.github.com/repos/$SLUG/actions/workflows/$UPSTREAM_CI_WORKFLOW/runs?branch=$UPSTREAM_BRANCH&status=success&event=push&per_page=1"
+          # The runner shares one egress IP, where anonymous API calls hit the
+          # hourly rate limit (403, seen on run 43335692146): present the job
+          # token first and fall back to anonymous.
+          RUNS=$(curl -fsS -H "Authorization: Bearer ${GH_API_TOKEN:-none}" -H "Accept: application/vnd.github+json" "$URL" 2>/dev/null \
+            || curl -fsS -H "Accept: application/vnd.github+json" "$URL" 2>/dev/null || true)
+          # `|| true`: no matching run makes grep exit 1, and `set -e` would
+          # take that as a step failure instead of the "cannot confirm" path.
+          GREEN=$(printf '%s' "$RUNS" | tr ',' '\n' | grep '"head_sha"' | head -1 | sed -e 's/.*"head_sha": *"//' -e 's/".*//' || true)
+          if ! { printf '%s' "$GREEN" | grep -Eq '^[0-9a-f]{40}$' && git merge-base --is-ancestor "$GREEN" "$TIP"; }; then
+            echo "::warning::No green CI run resolved for $SLUG — not advancing upstream this run."
+            GREEN=""
           fi
 
-          echo "Behind $BASE by $(git rev-list --count "HEAD..$BASE") commit(s)."
-          if ! git rebase "$BASE"; then
+          if [ -z "$GREEN" ]; then
+            # Never advance onto a commit whose own CI we cannot confirm: stay on
+            # the current (already gated) base and only re-check it.
+            if git merge-base --is-ancestor "$TIP" HEAD; then
+              stop_or_verify "Already current with $TIP."
+            fi
+            echo "Verifying the current tree; $TIP is $(git rev-list --count "HEAD..$TIP") commit(s) ahead but has no green run resolved."
+            echo "changed=yes" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+
+          if git merge-base --is-ancestor "$GREEN" HEAD; then
+            stop_or_verify "Already current with the newest green upstream commit $GREEN."
+          fi
+
+          echo "Newest green upstream commit: $GREEN ($(git rev-list --count "HEAD..$GREEN") commit(s) ahead)."
+          if ! git rebase "$GREEN"; then
             git rebase --abort
-            git --no-pager log --oneline -1 "$BASE"
+            git --no-pager log --oneline -1 "$GREEN"
             echo "changed=conflict" >> "$GITHUB_OUTPUT"
             echo "::error::Rebase conflict — a patch anchor moved. See fork-patches.md#replay-instructions."
             exit 1
           fi
 
           echo "changed=yes" >> "$GITHUB_OUTPUT"
-          git --no-pager log --oneline "$BASE"..HEAD
+          git --no-pager log --oneline "$GREEN"..HEAD
 
       - name: Cache bun installs
         if: steps.rebase.outputs.changed == 'yes'
