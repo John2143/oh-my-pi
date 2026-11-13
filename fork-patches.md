@@ -172,7 +172,10 @@ to hours later (5 of its 8 CI runs before 2026-11-13 failed), and a rebase onto
 a red commit fails the gate over their lint, catalog fixtures or formatting —
 nothing the fork can fix. Resolved from
 `https://api.github.com/repos/can1357/oh-my-pi/actions/workflows/ci.yml/runs?status=success&branch=main`;
-when that lookup fails the step falls back to the tip, i.e. the old behaviour. Pooled mode also reports every
+the lookup authenticates with the job token (the runner's shared egress IP is
+rate limited anonymously) and, if it still cannot resolve a green commit, the
+step does not advance at all: it re-verifies the current, already-gated base
+rather than rebasing onto a commit whose CI it cannot confirm. Pooled mode also reports every
 failing chunk instead of stopping at the first. It force-pushes `john` only if
 all of that passes; otherwise it comments on the "fork-sync: john needs
 attention" issue. A manual `force=true` dispatch re-verifies the current tip.
