@@ -160,9 +160,19 @@ closing brace and `async #handleAgentEnd`. The setup patch anchors are the three
 ## Fork-only CI (`.github/workflows/fork-sync.yml`)
 
 The fork's default branch is `john`, so the daily sync workflow lives here
-(scheduled workflows only run from the default branch). It rebases onto
-`upstream/main` and runs `bun run ci:check:full`, `bun run build:native` and
-`bun run test` with `OMP_TEST_CONCURRENCY=8`. Pooled mode also reports every
+(scheduled workflows only run from the default branch). It rebases onto the
+newest commit on `upstream/main` whose own CI passed — the tip whenever the tip
+is green, which is also what it was pinned to before — and runs
+`bun run ci:check:full`, `bun run build:native` and `bun run test` with
+`OMP_TEST_CONCURRENCY=16`.
+
+Tracking the newest *green* commit, not the tip, is what keeps the gate
+meaningful: upstream pushes broken commits to `main` and repairs them minutes
+to hours later (5 of its 8 CI runs before 2026-11-13 failed), and a rebase onto
+a red commit fails the gate over their lint, catalog fixtures or formatting —
+nothing the fork can fix. Resolved from
+`https://api.github.com/repos/can1357/oh-my-pi/actions/workflows/ci.yml/runs?status=success&branch=main`;
+when that lookup fails the step falls back to the tip, i.e. the old behaviour. Pooled mode also reports every
 failing chunk instead of stopping at the first. It force-pushes `john` only if
 all of that passes; otherwise it comments on the "fork-sync: john needs
 attention" issue. A manual `force=true` dispatch re-verifies the current tip.
