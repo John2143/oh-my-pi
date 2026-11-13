@@ -102,7 +102,33 @@ describe("SkillMessageComponent", () => {
 		expect(text).not.toContain("88 lines");
 	});
 
-	it("only chips the invoked skill; a second token the dispatcher ignored stays literal", () => {
+	it("chips every attached skill and reports the combined prompt size", () => {
+		const otherPath = path.join(os.homedir(), ".agent/skills/atomic-push/SKILL.md");
+		const component = new SkillMessageComponent(
+			makeMessage({
+				name: "atomic-commit",
+				path: skillPath,
+				lineCount: 88,
+				args: "fix auth",
+				prompt: "/skill:atomic-commit /skill:atomic-push fix auth",
+				skills: [
+					{ name: "atomic-commit", path: skillPath, lineCount: 88 },
+					{ name: "atomic-push", path: otherPath, lineCount: 12 },
+				],
+			}),
+		);
+		const lines = component.render(80);
+		const text = strip(lines);
+		expect(text).toContain(chip());
+		expect(text).toContain(skillChipLabel("atomic-push"));
+		expect(text).not.toContain("/skill:");
+		expect(text).toContain("2 skills · 100 lines");
+		// Each chip links to its own SKILL.md.
+		expect(lines.join("\n")).toContain(skillUri);
+		expect(lines.join("\n")).toContain(url.pathToFileURL(otherPath).href);
+	});
+
+	it("only chips attached skills; a token the dispatcher ignored stays literal", () => {
 		const component = new SkillMessageComponent(
 			makeMessage({
 				name: "atomic-commit",

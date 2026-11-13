@@ -12,7 +12,8 @@ import type { ImageContent, TextContent } from "@oh-my-pi/pi-ai";
 import { getBundledModel } from "@oh-my-pi/pi-catalog/models";
 import { ModelRegistry } from "@oh-my-pi/pi-coding-agent/config/model-registry";
 import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
-import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildUserSkillPromptsForTest } from "./helpers/skill-prompts";
 import { EventController } from "@oh-my-pi/pi-coding-agent/modes/controllers/event-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
 import { getThemeByName, setThemeInstance } from "@oh-my-pi/pi-tui/theme";
@@ -124,7 +125,7 @@ function createStubInputControllerContext(opts: {
 			isEvalRunning: false,
 			extensionRunner: undefined,
 			prompt,
-			buildUserSkillPrompt: buildSkillPromptMessage,
+			buildUserSkillPrompts: buildUserSkillPromptsForTest,
 			promptCustomMessage,
 		},
 		get viewSession() {
@@ -200,6 +201,28 @@ describe("InputController skill queue chip metadata", () => {
 		expect(promptCustomMessage.mock.calls[0]?.[0].details.__queueChipText).toBeUndefined();
 		expect(updatePendingMessagesDisplay).toHaveBeenCalledTimes(1);
 		expect(requestRender).toHaveBeenCalledTimes(1);
+	});
+
+	it("dispatches a draft naming two skills as one custom message carrying both bodies", async () => {
+		const second = await writeSkillFile(tempDir.path(), "second-skill", "Do the other thing.");
+		skillCommands.set("skill:second-skill", second);
+		const { ctx, editor, promptCustomMessage } = createStubInputControllerContext({
+			skillCommands,
+			isStreaming: false,
+		});
+		const controller = new InputController(ctx);
+		const text = "fix auth /skill:test-skill and /skill:second-skill";
+
+		controller.setupEditorSubmitHandler();
+		editor.setText(text);
+		await editor.onSubmit?.(text);
+
+		expect(promptCustomMessage).toHaveBeenCalledTimes(1);
+		const [message, options] = promptCustomMessage.mock.calls[0] ?? [];
+		expect(message?.content).toContain("Do the thing.");
+		expect(message?.content).toContain("Do the other thing.");
+		expect(message?.details.skills?.map(entry => entry.name)).toEqual(["test-skill", "second-skill"]);
+		expect(options).toEqual({ streamingBehavior: "steer", queueChipText: text });
 	});
 
 	it("queues known skill steers during compaction instead of dispatching immediately", async () => {
@@ -458,7 +481,7 @@ describe("compaction skill re-invocation", () => {
 			recordLocalSubmission: vi.fn((_text: string, _imageCount: number) => vi.fn()),
 			withLocalSubmission: vi.fn(async (_text: string, fn: () => unknown) => Promise.resolve(fn())),
 			session: {
-				buildUserSkillPrompt: buildSkillPromptMessage,
+				buildUserSkillPrompts: buildUserSkillPromptsForTest,
 				promptCustomMessage,
 				prompt,
 				steer,

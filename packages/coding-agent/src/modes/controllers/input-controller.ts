@@ -15,14 +15,15 @@ import {
 	type PasteOptions,
 	type SlashCommand,
 } from "@oh-my-pi/pi-tui";
-import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import { formatBytes, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
 import { formatDoubleTap } from "@oh-my-pi/pi-tui/app-keybindings";
 import { appKey, editorKey } from "@oh-my-pi/pi-tui/chrome/keybinding-hints";
+import type { AutocompleteItem } from "@oh-my-pi/pi-tui/autocomplete";
 import { parseConfiguredThinkingLevel } from "@oh-my-pi/pi-tui/thinking";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { resolveModelRoleValue } from "../../config/model-resolver";
 import { isSettingsInitialized, settings } from "../../config/settings";
-import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
+import { InternalUrlRouter, type LocalFileEntry, listLocalFiles, resolveLocalRoot } from "../../internal-urls";
 import { ApprovalDialogComponent } from "@oh-my-pi/pi-tui/overlays/approval-dialog";
 import { AskDialogComponent } from "@oh-my-pi/pi-tui/overlays/ask-dialog";
 import { AssistantMessageComponent } from "@oh-my-pi/pi-tui/chat/assistant-message";
@@ -42,18 +43,25 @@ import { expandEmoticons } from "@oh-my-pi/pi-tui/prompt/emoji-autocomplete";
 import { setCachedImageDimensions } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { createPromptActionAutocompleteProvider } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
 import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
+import { HINT_TOKEN_PREFIXES } from "@oh-my-pi/pi-tui/prompt/skill-tokens";
 import { createModelBrowserSource } from "../model-browser-source";
 import { formatQueueShorthand, parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensibility/slash-commands";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
-import { openLocalFileInEditor } from "../local-file-editor";
+import { openLocalFileInEditor, sessionLocalProtocolOptions } from "../local-file-editor";
 import { AgentRegistry } from "../../registry/agent-registry";
 import type { RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
+import { listAgentCompletions } from "../../task/agent-completions";
 import { PINNED_HUD_TOGGLE_ID } from "../../task/output-manager";
+import { cfgTaskDisabledAgents } from "../../task/settings";
 import { pickRecentFocusableAgentId } from "./session-focus-controller";
-import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import {
+	executeBuiltinSlashCommand,
+	lookupBuiltinSlashCommand,
+	resolveBuiltinInvocation,
+} from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
 import { isTinyLocalModelKey } from "../../tiny/models";
@@ -1626,10 +1634,8 @@ export class InputController {
 
 	/** Whether `text` dispatches to a builtin, matching executeBuiltinSlashCommand(). */
 	#matchesBuiltinSlashCommand(text: string): boolean {
-		const parsed = parseSlashCommand(text);
-		if (!parsed) return false;
-		const builtin = lookupBuiltinSlashCommand(parsed.name);
-		return builtin !== undefined && (builtin.allowArgs === true || !parsed.args);
+		const resolved = resolveBuiltinInvocation(text);
+		return resolved !== undefined && (resolved.command.allowArgs === true || !resolved.parsed.args);
 	}
 
 	/** Whether `text` invokes a registered extension command, which runs locally instead of prompting the model. */
@@ -2996,15 +3002,63 @@ export class InputController {
 
 	createAutocompleteProvider(commands: SlashCommand[], basePath: string): AutocompleteProvider {
 		void commandUsage.load();
+		const modelMentions = createModelMentionSource({
+			source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
+			registry: this.ctx.session.modelRegistry,
+			scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
+		});
+		let localFiles: { items: readonly LocalFileEntry[]; at: number } | undefined;
+		const listLocalFileEntries = async (): Promise<readonly LocalFileEntry[]> => {
+			if (localFiles && Date.now() - localFiles.at < 2_000) return localFiles.items;
+			const items = await listLocalFiles(sessionLocalProtocolOptions(this.ctx.sessionManager));
+			localFiles = { items, at: Date.now() };
+			return items;
+		};
+		// Keyed by the gate's own prefixes, so the composer cannot offer a hint the
+		// parser refuses (or miss one it accepts).
+		const namespaceCompletions: Record<
+			(typeof HINT_TOKEN_PREFIXES)[number],
+			(query: string) => readonly AutocompleteItem[] | Promise<readonly AutocompleteItem[]>
+		> = {
+			"/agent:": async query => {
+				const agents = await listAgentCompletions({
+					cwd: this.ctx.sessionManager.getCwd(),
+					extensionRoots: this.ctx.session.effectiveExtensionRoots,
+					disabledAgents: cfgTaskDisabledAgents.get(this.ctx.settings),
+					planMode: this.ctx.session.getPlanModeState()?.enabled === true,
+					sessionAgents: this.ctx.session.getSessionAgents(),
+				});
+				const lower = query.toLowerCase();
+				return agents
+					.filter(agent => agent.name.toLowerCase().includes(lower))
+					.map(agent => ({ value: `agent:${agent.name}`, label: agent.name, description: agent.description }));
+			},
+			"/model:": query =>
+				Array.from(modelMentions(query))
+					.slice(0, 20)
+					.map(item => ({ value: `model:${item.selector}`, label: item.selector, description: item.model.name })),
+			"/local:": async query => {
+				const entries = await listLocalFileEntries();
+				const lower = query.toLowerCase();
+				return entries
+					.filter(entry => entry.name.toLowerCase().includes(lower))
+					.slice(0, 20)
+					.map(entry => ({
+						value: `local:${entry.name}`,
+						label: entry.name,
+						description: formatBytes(entry.size),
+					}));
+			},
+		};
 		return createPromptActionAutocompleteProvider({
 			commands,
 			basePath,
 			commandUsage: name => commandUsage.get(name),
-			modelMentions: createModelMentionSource({
-				source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
-				registry: this.ctx.session.modelRegistry,
-				scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
-			}),
+			modelMentions,
+			namespaces: HINT_TOKEN_PREFIXES.map(prefix => ({
+				prefix: prefix.slice(1),
+				getCompletions: namespaceCompletions[prefix],
+			})),
 			// This TUI host uses the default registry; the receiving session can change with focus.
 			internalUrlCaller: () => {
 				const manager = this.ctx.viewSession.sessionManager;

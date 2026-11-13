@@ -200,7 +200,7 @@ describe("model mentions", () => {
 		});
 		const { dir, skill } = await createTaggedSkill();
 		try {
-			const built = await agentSession.buildUserSkillPrompt(skill, { args: "ask ^b/y to help" });
+			const built = await agentSession.buildUserSkillPrompts([skill], { args: "ask ^b/y to help" });
 			await agentSession.promptCustomMessage({
 				customType: SKILL_PROMPT_MESSAGE_TYPE,
 				content: built.message,
@@ -238,7 +238,7 @@ describe("model mentions", () => {
 		const { dir, skill: taggedSkill } = await createTaggedSkill();
 		const image = { type: "image" as const, mimeType: "image/png", data: "aGVsbG8=" };
 		try {
-			const built = await agentSession.buildUserSkillPrompt(taggedSkill, { args: "ask ^b/y to help" });
+			const built = await agentSession.buildUserSkillPrompts([taggedSkill], { args: "ask ^b/y to help" });
 			await agentSession.promptCustomMessage(
 				{
 					customType: SKILL_PROMPT_MESSAGE_TYPE,
@@ -292,8 +292,8 @@ describe("model mentions", () => {
 				session: {
 					skillsSettings: { enableSkillCommands: true },
 					skills: [{ ...skill, description: "Tagged skill", source: "test" }],
-					buildUserSkillPrompt: agentSession.buildUserSkillPrompt.bind(agentSession),
-					renderUserSkillPrompt: agentSession.renderUserSkillPrompt.bind(agentSession),
+					buildUserSkillPrompts: agentSession.buildUserSkillPrompts.bind(agentSession),
+					renderUserSkillPrompts: agentSession.renderUserSkillPrompts.bind(agentSession),
 					promptCustomMessage: agentSession.promptCustomMessage.bind(agentSession),
 				},
 				message: "/skill:test ask ^b/y to help",

@@ -2226,7 +2226,8 @@ export class Editor implements Component, Focusable {
 					findLeadingSlashCommandStart(this.#autocompletePrefix) !== null &&
 					this.#isInSubmittedSlashCommandContext() &&
 					!this.#selectedCompletionIsPath() &&
-					!this.#selectedCompletionIsSkillNamespace()
+					!this.#selectedCompletionIsSkillNamespace() &&
+					!this.#selectedCompletionIsHint()
 				) {
 					const selected = this.#autocompleteList.getSelectedItem();
 					// Check for stale autocomplete state while an async refresh is pending
@@ -2276,6 +2277,12 @@ export class Editor implements Component, Focusable {
 						// description-only hit the user never selected: cancel and fall
 						// through to normal submission instead of swallowing the keypress.
 						this.#cancelAutocomplete();
+						// A hint token is prose in a draft the user is still editing: Enter
+						// closes the popup instead of submitting a half-typed namespace.
+						if (this.#isInNamespaceHintContext()) {
+							this.onAutocompleteUpdate?.();
+							return;
+						}
 					} else {
 						if (selected && this.#autocompleteProvider) {
 							const shouldChainSlashCommandAutocomplete = this.#isSlashCommandNameAutocompleteSelection();
@@ -2419,7 +2426,11 @@ export class Editor implements Component, Focusable {
 					// The collapsed `/skill:` namespace row is not a runnable command; Enter submits
 					// immediately after applying, so only a real command may be completed here, and
 					// only one whose name matches: a description-only hit would run an unrelated command.
-					const selected = syncResult?.items.find(item => item.value !== SKILL_NAMESPACE);
+					const selected = syncResult?.items.find(
+						item =>
+							item.value !== SKILL_NAMESPACE &&
+							!(this.#autocompleteProvider?.isNamespaceValue?.(item.value) ?? false),
+					);
 					if (syncResult && selected && !selected.descriptionMatch) {
 						// Invalidate any pending async autocomplete so its stale results are discarded
 						this.#autocompleteRequestId += 1;
@@ -3793,6 +3804,10 @@ export class Editor implements Component, Focusable {
 			) {
 				this.#tryTriggerAutocomplete();
 			}
+			// A hint token opens its popup the moment the colon lands.
+			else if (char === ":" && this.#isInNamespaceHintContext()) {
+				this.#tryTriggerAutocomplete();
+			}
 			// Argument providers may expose candidates only after a separator.
 			else if (char === " " && this.#isInSubmittedSlashCommandContext()) {
 				this.#tryTriggerAutocomplete();
@@ -4913,7 +4928,17 @@ export class Editor implements Component, Focusable {
 	}
 
 	#isInSlashAutocompleteContext(): boolean {
-		return this.#isInSubmittedSlashCommandContext() || this.#isInMidPromptSkillSlashContext();
+		return (
+			this.#isInSubmittedSlashCommandContext() ||
+			this.#isInMidPromptSkillSlashContext() ||
+			this.#isInNamespaceHintContext()
+		);
+	}
+
+	/** Whether the cursor sits in a `/namespace:` hint token (`/agent:`, `/model:`, `/local:`). */
+	#isInNamespaceHintContext(): boolean {
+		const currentLine = this.#state.lines[this.#state.cursorLine] || "";
+		return this.#autocompleteProvider?.isNamespaceToken?.(currentLine.slice(0, this.#state.cursorCol)) === true;
 	}
 
 	/**
@@ -4939,6 +4964,18 @@ export class Editor implements Component, Focusable {
 	 */
 	#autocompletePrefixMatchesCursorText(currentTextBeforeCursor: string, item?: SelectItem | null): boolean {
 		if (currentTextBeforeCursor === this.#autocompletePrefix) return true;
+
+		// Hint tokens carry `/` inside their name (`/local:src/fi`), which the
+		// leading-slash branch below rejects; a row that still matches the live
+		// token is safe, a stale one (typed past it) is not.
+		if (
+			item !== null &&
+			item !== undefined &&
+			this.#autocompleteProvider?.isNamespaceValue?.(item.value) === true &&
+			this.#autocompleteProvider.matchesNamespaceQuery?.(currentTextBeforeCursor, item.value) === true
+		) {
+			return true;
+		}
 
 		if (item?.value.startsWith("skill:") && findTrailingSlashCommandStart(this.#autocompletePrefix) !== null) {
 			const currentTrailingStart = findTrailingSlashCommandStart(currentTextBeforeCursor);
@@ -4998,6 +5035,16 @@ export class Editor implements Component, Focusable {
 	 */
 	#selectedCompletionIsSkillNamespace(): boolean {
 		return this.#autocompleteList?.getSelectedItem()?.value === SKILL_NAMESPACE;
+	}
+
+	/**
+	 * Whether the current popup selection is `/namespace:` hint completion.
+	 * Accepting a hint only inserts text: nothing may run, so Enter must never
+	 * apply-and-submit it.
+	 */
+	#selectedCompletionIsHint(): boolean {
+		const value = this.#autocompleteList?.getSelectedItem()?.value;
+		return value !== undefined && this.#autocompleteProvider?.isNamespaceValue?.(value) === true;
 	}
 
 	/**
@@ -5450,6 +5497,8 @@ export class Editor implements Component, Focusable {
 		if (!this.#isInSubmittedSlashCommandContext()) return false;
 		const currentLine = this.#state.lines[this.#state.cursorLine] ?? "";
 		const textBeforeCursor = currentLine.slice(0, this.#state.cursorCol);
+		// Hint tokens never match a command name: only the async path can serve them.
+		if (provider.isNamespaceToken?.(textBeforeCursor)) return false;
 		const token = textBeforeCursor.trimStart();
 		if (token.includes(" ")) return false;
 		const suggestions = provider.trySyncSlashCompletion(textBeforeCursor);

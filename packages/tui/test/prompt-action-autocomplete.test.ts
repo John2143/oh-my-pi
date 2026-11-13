@@ -50,6 +50,45 @@ function mentionProvider(candidates: readonly ModelBrowserItem[]) {
 }
 
 describe("prompt action autocomplete", () => {
+	it("serves hint namespaces through the wrapper and applies them in place", async () => {
+		const provider = createPromptActionAutocompleteProvider({
+			commands: [{ name: "btw", description: "By the way", allowArgs: true }],
+			basePath: "/tmp",
+			namespaces: [
+				{
+					prefix: "agent:",
+					getCompletions: (query: string) => {
+						const lower = query.toLowerCase();
+						return ["scout", "oracle"]
+							.filter(name => name.includes(lower))
+							.map(name => ({ value: `agent:${name}`, label: name }));
+					},
+				},
+			],
+			keybindings: AppKeybindingsManager.inMemory(),
+			copyCurrentLine: () => {},
+			copyPrompt: () => {},
+			undo: () => {},
+			moveCursorToMessageEnd: () => {},
+			moveCursorToMessageStart: () => {},
+			moveCursorToLineStart: () => {},
+			moveCursorToLineEnd: () => {},
+		});
+		const line = "review ^sonnet with /agent:sco";
+
+		const result = await provider.getSuggestions([line], 0, line.length);
+		const selected = result?.items[0];
+		if (!result || !selected) throw new Error("expected an agent candidate");
+
+		expect(selected.value).toBe("agent:scout");
+		expect(provider.isNamespaceToken("/agent:sco")).toBe(true);
+		expect(provider.matchesNamespaceQuery("/agent:sco", "agent:scout")).toBe(true);
+		expect(provider.matchesNamespaceQuery("/agent:ora", "agent:scout")).toBe(false);
+		expect(provider.applyCompletion([line], 0, line.length, selected, result.prefix).lines[0]).toBe(
+			"review ^sonnet with /agent:scout ",
+		);
+	});
+
 	beforeAll(async () => {
 		await initTheme();
 		// The coding-agent internal-url router installs the real host; here a stub

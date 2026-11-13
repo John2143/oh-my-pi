@@ -6,7 +6,8 @@ import { Settings } from "@oh-my-pi/pi-coding-agent/config/settings";
 import { ExtensionRuntime, loadExtensionFromFactory } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/loader";
 import { ExtensionRunner } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/runner";
 import type { ExtensionFactory, InputEvent } from "@oh-my-pi/pi-coding-agent/extensibility/extensions/types";
-import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import type { Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
+import { buildUserSkillPromptsForTest } from "./helpers/skill-prompts";
 import { CustomEditor } from "@oh-my-pi/pi-tui/prompt/custom-editor";
 import { CommandController } from "@oh-my-pi/pi-coding-agent/modes/controllers/command-controller";
 import { InputController } from "@oh-my-pi/pi-coding-agent/modes/controllers/input-controller";
@@ -58,7 +59,7 @@ async function createHarness(factory: ExtensionFactory) {
 		queuedMessageCount: 0,
 		prompt,
 		followUp: vi.fn(async (_text: string, _images?: ImageContent[]) => {}),
-		buildUserSkillPrompt: buildSkillPromptMessage,
+		buildUserSkillPrompts: buildUserSkillPromptsForTest,
 		promptCustomMessage: vi.fn(async () => true),
 		abort: vi.fn(async () => {}),
 		prewarmModelConnection: vi.fn(),

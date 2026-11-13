@@ -34,8 +34,9 @@ import {
 import { allowsSkillTokens, SKILL_TOKEN_RE } from "@oh-my-pi/pi-tui/prompt/skill-tokens";
 import autoloadTemplate from "../prompts/skills/autoload.md" with { type: "text" };
 import userInvocationTemplate from "../prompts/skills/user-invocation.md" with { type: "text" };
+import userInvocationsTemplate from "../prompts/skills/user-invocations.md" with { type: "text" };
 import { SKILLSHARE_PROVIDER_ID } from "../discovery/skillshare";
-import type { SkillPromptDetails } from "../session/messages";
+import type { SkillPromptDetails, SkillPromptEntry } from "../session/messages";
 import { expandTilde } from "../tools/path-utils";
 
 export { allowsSkillTokens, SKILL_TOKEN_RE };
@@ -796,56 +797,53 @@ export function getSkillSlashCommandName(skill: Pick<Skill, "name">): string {
 }
 
 /**
- * Parsed `/skill:<name>` invocation: either at the start of the draft (the
- * traditional slash-command position) or as a `/skill:<name>` token embedded
- * mid-prompt. For the mid-prompt form the surrounding prose is threaded
- * through as `args` so the skill sees the full user request.
+ * Parsed `/skill:<name>` invocation: the draft may carry several such tokens,
+ * at the start (the traditional slash-command position) or embedded in the
+ * prose. Every named skill is invoked; the surrounding prose is threaded
+ * through as `args` so the skills see the full user request.
  */
 export interface ParsedSkillInvocation {
-	/** Bare skill name without the leading `skill:` prefix. */
+	/** Every invoked skill name, in draft order; duplicates preserved. */
+	names: readonly string[];
+	/** `names[0]`, for callers that need one name. */
 	name: string;
-	/** User-supplied arguments (everything outside the `/skill:<name>` token). */
+	/** The draft with every `/skill:<name>` token removed and collapsed. */
 	args: string;
-	/** The draft as submitted (trimmed), token in place — drives the transcript layout. */
+	/** The draft as submitted (trimmed), tokens in place — drives the transcript layout. */
 	prompt: string;
 }
 
 /**
- * Detect a `/skill:<name>` invocation in a user draft.
+ * Detect the `/skill:<name>` invocations in a user draft.
  *
- * Returns `undefined` when the text contains no skill token. Otherwise:
- *   - Leading form (`/skill:foo bar baz`): name=`foo`, args=`bar baz`.
- *   - Mid-prompt form (`fix the bug /skill:foo focus on auth`): name=`foo`,
- *     args=`fix the bug focus on auth` — the surrounding prose collapsed
- *     into a single args string.
+ * Returns `undefined` when the text contains no skill token. Otherwise `names`
+ * lists every invoked skill in draft order (`/skill:a fix it /skill:b` →
+ * `["a", "b"]`) and `args` is the draft with the tokens removed — `/skill:a
+ * fix it /skill:b` → `fix it`. `prompt` keeps the draft verbatim, tokens
+ * included.
  *
- * Mid-prompt detection is gated by {@link allowsSkillTokens}.
+ * Detection is gated by {@link allowsSkillTokens}; a leading token is simply
+ * the first match.
  */
 export function parseSkillInvocation(text: string): ParsedSkillInvocation | undefined {
 	const trimmedStart = text.trimStart();
 	const prompt = trimmedStart.trimEnd();
-	if (trimmedStart.startsWith("/skill:")) {
-		const spaceIndex = trimmedStart.search(/\s/);
-		const name =
-			spaceIndex === -1 ? trimmedStart.slice("/skill:".length) : trimmedStart.slice("/skill:".length, spaceIndex);
-		if (!name) return undefined;
-		const args = spaceIndex === -1 ? "" : trimmedStart.slice(spaceIndex + 1).trim();
-		return { name, args, prompt };
-	}
 	if (!allowsSkillTokens(trimmedStart)) return undefined;
 	SKILL_TOKEN_RE.lastIndex = 0;
-	const match = SKILL_TOKEN_RE.exec(text);
-	if (!match) return undefined;
-	const tokenStart = match.index + match[1].length;
-	const tokenEnd = match.index + match[0].length;
-	const name = match[2];
-	const before = text.slice(0, tokenStart).trimEnd();
-	const after = text.slice(tokenEnd).trimStart();
-	const args = [before, after]
-		.filter(part => part.length > 0)
-		.join(" ")
+	const names: string[] = [];
+	for (let match = SKILL_TOKEN_RE.exec(prompt); match !== null; match = SKILL_TOKEN_RE.exec(prompt)) {
+		names.push(match[2]);
+	}
+	if (names.length === 0) return undefined;
+	// Mark each removed token with NUL so the surrounding whitespace collapses
+	// once, without gluing words together or eating the newlines between lines.
+	SKILL_TOKEN_RE.lastIndex = 0;
+	const args = prompt
+		.replace(SKILL_TOKEN_RE, "\u0000")
+		.replace(/[ \t]*(?:\u0000[ \t]*)+/g, " ")
+		.replace(/[ \t]+(?=\n)/g, "")
 		.trim();
-	return { name, args, prompt };
+	return { name: names[0], names, args, prompt };
 }
 
 export type SkillInvocationKind = "user" | "autoload";
@@ -906,18 +904,18 @@ export function renderSkillPromptMessage(
 	options?: { expandUserArgs?: (args: string) => string },
 ): BuiltSkillPromptMessage {
 	const trimmedArgs = input.args.trim();
-	const renderedArgs =
-		invocation === "user" && trimmedArgs ? (options?.expandUserArgs?.(trimmedArgs) ?? trimmedArgs) : trimmedArgs;
 	let message: string;
 	if (invocation === "user") {
-		// User-invoked skills announce themselves and expose their skill directory
-		// so the model resolves the skill's own relative paths (scripts/, templates/).
+		// The user chose this skill in their draft: show the draft as typed, hint
+		// tokens included, so the request reads the way it was written. A draft with
+		// nothing but tokens carries no request of its own, so it shows no user line.
+		const userArgs = trimmedArgs ? (input.prompt ?? input.args).trim() : "";
 		message = prompt
 			.render(userInvocationTemplate, {
 				name: skill.name,
 				body,
 				baseDir: skill.baseDir,
-				userArgs: renderedArgs || undefined,
+				userArgs: userArgs ? (options?.expandUserArgs?.(userArgs) ?? userArgs) : undefined,
 			})
 			.trim();
 	} else {
@@ -939,6 +937,51 @@ export function renderSkillPromptMessage(
 			args: trimmedArgs || undefined,
 			prompt: input.prompt,
 			lineCount: body ? body.split("\n").length : 0,
+		},
+	};
+}
+
+function skillPromptEntry({ skill, body }: LoadedSkillPrompt): SkillPromptEntry {
+	return { name: skill.name, path: skill.filePath, lineCount: body ? body.split("\n").length : 0 };
+}
+
+/**
+ * Render one user prompt that invokes every skill in `loaded`: one body for the
+ * singular invocation, a single combined prompt (one `User:` line) for several.
+ * `details.skills` always names each attached skill so the transcript can chip
+ * them all.
+ */
+export function renderUserSkillPrompts(
+	loaded: readonly LoadedSkillPrompt[],
+	input: SkillPromptInput,
+	options?: { expandUserArgs?: (args: string) => string },
+): BuiltSkillPromptMessage {
+	const first = loaded[0];
+	if (!first) throw new Error("renderUserSkillPrompts requires at least one skill");
+	const args = input.args.trim();
+	if (loaded.length === 1) {
+		const built = renderSkillPromptMessage(first.skill, input, first.body, "user", options);
+		return { message: built.message, details: { ...built.details, skills: [skillPromptEntry(first)] } };
+	}
+	// The draft reaches the model as typed. `args` only decides whether the draft
+	// says anything beyond its tokens; a draft that is just tokens shows no user line.
+	const userArgs = args ? (input.prompt ?? input.args).trim() : "";
+	const message = prompt
+		.render(userInvocationsTemplate, {
+			count: loaded.length,
+			skills: loaded.map(({ skill, body }) => ({ name: skill.name, baseDir: skill.baseDir, body })),
+			userArgs: userArgs ? (options?.expandUserArgs?.(userArgs) ?? userArgs) : undefined,
+		})
+		.trim();
+	return {
+		message,
+		details: {
+			name: first.skill.name,
+			path: first.skill.filePath,
+			args: args || undefined,
+			prompt: input.prompt,
+			lineCount: first.body ? first.body.split("\n").length : 0,
+			skills: loaded.map(skillPromptEntry),
 		},
 	};
 }

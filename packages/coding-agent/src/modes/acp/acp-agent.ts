@@ -55,7 +55,7 @@ import {
 } from "../../extensibility/extensions";
 import { runExtensionCompact } from "../../extensibility/extensions/compact-handler";
 import { getSessionSlashCommands } from "../../extensibility/extensions/get-commands-handler";
-import { parseSkillInvocation } from "../../extensibility/skills";
+import { getSkillSlashCommandName, parseSkillInvocation, type Skill } from "../../extensibility/skills";
 import { PYTHON_KERNEL_CANCEL_BUDGET_MS } from "../../eval/py/kernel";
 import { MCPManager } from "../../mcp/manager";
 import { reconnectMcpManagerServer } from "../../mcp/oauth-reauth";
@@ -1528,11 +1528,19 @@ export class AcpAgent implements Agent {
 		if (!parsed) {
 			return false;
 		}
-		const skill = record.session.skills.find(candidate => candidate.name === parsed.name);
-		if (!skill) {
+		const skills: Skill[] = [];
+		const seen = new Set<string>();
+		for (const name of parsed.names) {
+			const command = getSkillSlashCommandName({ name });
+			const skill = record.session.skills.find(candidate => getSkillSlashCommandName(candidate) === command);
+			if (!skill || seen.has(skill.name)) continue;
+			seen.add(skill.name);
+			skills.push(skill);
+		}
+		if (skills.length === 0) {
 			return false;
 		}
-		const built = await record.session.buildUserSkillPrompt(skill, parsed);
+		const built = await record.session.buildUserSkillPrompts(skills, parsed);
 		await record.session.promptCustomMessage(
 			{
 				customType: SKILL_PROMPT_MESSAGE_TYPE,
