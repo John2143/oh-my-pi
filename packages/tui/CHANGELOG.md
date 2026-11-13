@@ -4,7 +4,7 @@
 
 ### Added
 
-- A skill card chips every skill a draft invoked and reports the combined prompt size (`2 skills · 41 lines`)
+- A skill card chips every skill a draft invoked and reports the combined prompt size (`2 skills · 41 lines`) ([#4](https://github.com/John2143/oh-my-pi/pull/4))
 
 ## [18.20.0] - 2026-11-12
 
