@@ -173,7 +173,18 @@ jobs:
 
       - name: Full test suite
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop --no-eval-cache .#default -c bun run test
+        shell: bash
+        run: |
+          set -euo pipefail
+          # Upstream's agent-session-bash-session-ownership fixture drives a
+          # `perl -e` child that publishes its pid, and this runner has no perl:
+          # a hosted runner does, but neither the dev shell nor the service PATH
+          # does, so the fixture never writes the pid file and two of its tests
+          # fail here only (run 43338531530). Resolved from the flake's own
+          # nixpkgs so the C++-less-shell path does not depend on the registry.
+          PERL_BIN=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#perl \
+            | grep -v -- '-man$' | head -1)/bin
+          nix develop --no-eval-cache .#default -c bash -c "export PATH=$PERL_BIN:\$PATH; bun run test"
 
       - name: Push john
         if: steps.rebase.outputs.changed == 'yes'
