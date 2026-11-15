@@ -6,10 +6,18 @@ import {
 	resolveBuiltinInvocation,
 } from "@oh-my-pi/pi-coding-agent/slash-commands/builtin-registry";
 
-describe("colon-form arguments are opt-in", () => {
-	it("leaves colon forms of commands that do not declare them to the model", () => {
-		for (const text of ["/local:x", "/switch:x", "/move:x", "/git:x", "/queue:x"]) {
+describe("hint namespaces own their colon form", () => {
+	it("leaves the hint namespaces to the model", () => {
+		for (const text of ["/agent:scout", "/model:opus", "/local:plans/x.md"]) {
 			expect(resolveBuiltinInvocation(text)).toBeUndefined();
+		}
+	});
+
+	it("keeps colon-as-argument for every other command", () => {
+		for (const text of ["/switch:sonnet", "/move:notes", "/git:status", "/btw:quick one", "/effort:high"]) {
+			const resolved = resolveBuiltinInvocation(text);
+			expect(resolved?.parsed.name).toBe(text.slice(1, text.indexOf(":")));
+			expect(resolved?.parsed.args).toBe(text.slice(text.indexOf(":") + 1));
 		}
 	});
 
@@ -19,13 +27,8 @@ describe("colon-form arguments are opt-in", () => {
 		}
 	});
 
-	it("keeps a declared colon alias dispatchable", () => {
+	it("keeps `/force:bash` dispatchable", () => {
 		expect(resolveBuiltinInvocation("/force:bash")?.parsed.args).toBe("bash");
-	});
-
-	it("advertises colon-namespaced extension commands only where a builtin declares the form", () => {
-		expect(isAcpBuiltinShadowedName("model:foo")).toBe(false);
-		expect(isAcpBuiltinShadowedName("force:bash")).toBe(true);
 	});
 
 	it("does not dispatch `/local:x` as the `/local` command", async () => {
@@ -49,5 +52,13 @@ describe("colon-form arguments are opt-in", () => {
 
 		expect(await executeBuiltinSlashCommand("/force:bash", runtime)).toBe(true);
 		expect(setForcedToolChoice).toHaveBeenCalledWith("bash");
+	});
+
+	it("advertises colon-namespaced extension commands unless a builtin captures them", () => {
+		// `/model:foo` is prose (hint namespace), so the extension keeps its name.
+		expect(isAcpBuiltinShadowedName("model:foo")).toBe(false);
+		// `/switch:foo` still dispatches to `/switch`, which takes arguments.
+		expect(isAcpBuiltinShadowedName("switch:foo")).toBe(true);
+		expect(isAcpBuiltinShadowedName("force:bash")).toBe(true);
 	});
 });

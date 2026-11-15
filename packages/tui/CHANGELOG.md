@@ -2,6 +2,10 @@
 
 ## [Unreleased]
 
+### Added
+
+- A skill card chips every skill a draft invoked and reports the combined prompt size (`2 skills · 41 lines`) ([#4](https://github.com/John2143/oh-my-pi/pull/4))
+
 ## [18.20.1] - 2026-11-14
 
 ### Added
@@ -22,9 +26,6 @@
 - Improved working-row animation while waiting for tools or models on terminals without synchronized output, including tmux 3.6.
 - Fixed expanded IRC tool cards to show complete soft-wrapped output and added an expand hint to collapsed cards containing hidden text.
 - Fixed premature scrolling in the `/resume` session picker when navigating near the middle of the list.
-### Added
-
-- A skill card chips every skill a draft invoked and reports the combined prompt size (`2 skills · 41 lines`) ([#4](https://github.com/John2143/oh-my-pi/pull/4))
 
 ## [18.20.0] - 2026-11-12
 

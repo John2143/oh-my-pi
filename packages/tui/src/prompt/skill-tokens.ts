@@ -14,6 +14,16 @@ export const SKILL_TOKEN_RE = /(^|\s)\/skill:([^\s/]+(?:\/[^\s/]+)?)(?=\s|$)/g;
 export const HINT_TOKEN_PREFIXES = ["/agent:", "/model:", "/local:"] as const;
 
 /**
+ * Whether `text` opens a hint-namespace token (`/agent:`, `/model:`, `/local:`).
+ * Those colon forms are prose the model reads; every other command keeps
+ * `parseSlashCommand`'s colon-as-argument contract.
+ */
+export function startsWithHintNamespace(text: string): boolean {
+	const trimmedStart = text.trimStart();
+	return HINT_TOKEN_PREFIXES.some(prefix => trimmedStart.startsWith(prefix));
+}
+
+/**
  * Whether the (already left-trimmed) draft begins with a TUI local-execution
  * sigil that downstream branches consume verbatim.
  */
@@ -35,7 +45,7 @@ export function allowsSkillTokens(text: string): boolean {
 	const trimmedStart = text.trimStart();
 	if (trimmedStart.startsWith("/skill:")) return true;
 	// A draft may open with a hint token and still carry skill tokens further in.
-	if (trimmedStart.startsWith("/")) return HINT_TOKEN_PREFIXES.some(prefix => trimmedStart.startsWith(prefix));
+	if (trimmedStart.startsWith("/")) return startsWithHintNamespace(trimmedStart);
 	return !startsWithLocalExecutionPrefix(trimmedStart);
 }
 

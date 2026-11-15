@@ -21,6 +21,7 @@ import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { parseSlashCommand } from "./helpers/parse";
+import { startsWithHintNamespace } from "@oh-my-pi/pi-tui/prompt/skill-tokens";
 import type {
 	BuiltinSlashCommand,
 	ParsedSlashCommand,
@@ -205,21 +206,20 @@ export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | unde
 }
 
 /**
- * Resolve `text` to a builtin command, honoring colon-form arguments only for
- * commands that declare them (`aliases: ["force:"]`). `/local x` runs the
- * command; `/local:x` is a hint in prose, because a bare `/local:` reads as the
- * `/local:` namespace and must reach the model instead of opening `$EDITOR`.
+ * Resolve `text` to a builtin command. `parseSlashCommand` splits on the first
+ * whitespace or colon, so `/foo:bar` is `/foo` with argument `bar` — except for
+ * the hint namespaces (`/agent:`, `/model:`, `/local:`), whose colon form is
+ * prose the model reads rather than a command: `/local:x` must reach the model,
+ * while `/local x` still opens the file picker.
  */
 export function resolveBuiltinInvocation(
 	text: string,
 ): { command: SlashCommandSpec; parsed: ParsedSlashCommand } | undefined {
+	if (startsWithHintNamespace(text)) return undefined;
 	const parsed = parseSlashCommand(text);
 	if (!parsed) return undefined;
 	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
 	if (!command) return undefined;
-	if (text.startsWith(`/${parsed.name}:`) && !(command.aliases ?? []).includes(`${parsed.name}:`)) {
-		return undefined;
-	}
 	return { command, parsed };
 }
 

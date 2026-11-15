@@ -43,7 +43,7 @@ import { expandEmoticons } from "@oh-my-pi/pi-tui/prompt/emoji-autocomplete";
 import { setCachedImageDimensions } from "@oh-my-pi/pi-tui/prompt/image-references";
 import { createPromptActionAutocompleteProvider } from "@oh-my-pi/pi-tui/prompt/prompt-action-autocomplete";
 import { createModelMentionSource } from "@oh-my-pi/pi-tui/prompt/model-mention-autocomplete";
-import { HINT_TOKEN_PREFIXES } from "@oh-my-pi/pi-tui/prompt/skill-tokens";
+import { HINT_TOKEN_PREFIXES, startsWithHintNamespace } from "@oh-my-pi/pi-tui/prompt/skill-tokens";
 import { createModelBrowserSource } from "../model-browser-source";
 import { formatQueueShorthand, parseQueueShorthand, splitQueuedMessages } from "@oh-my-pi/pi-tui/prompt/queue-input";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
@@ -3044,6 +3044,8 @@ export class InputController {
 	 */
 	#recordSlashCommandUsage(text: string): void {
 		if (!text.startsWith("/")) return;
+		// Hint tokens are prose, not command usage: `/model:x` must not rank `/model`.
+		if (startsWithHintNamespace(text)) return;
 		const token = text.slice(1).split(/\s+/, 1)[0] ?? "";
 		if (!token) return;
 		if (this.#isKnownNonBuiltinSlashCommandToken(token)) {

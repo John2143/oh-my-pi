@@ -1,4 +1,5 @@
 import type { AvailableCommand } from "@oh-my-pi/pi-utils/acp";
+import { startsWithHintNamespace } from "@oh-my-pi/pi-tui/prompt/skill-tokens";
 import {
 	BUILTIN_SLASH_COMMANDS_INTERNAL,
 	lookupBuiltinSlashCommand,
@@ -21,16 +22,17 @@ export const ACP_BUILTIN_RESERVED_NAMES: ReadonlySet<string> = new Set(
 /**
  * Whether an extension command named `name` would be captured by ACP builtin
  * dispatch before reaching the extension handler. Beyond exact name/alias
- * collisions, a colon-namespaced name is captured only by a builtin that
- * declares its colon form (e.g. `force:tool`), because colon arguments are
- * otherwise hint tokens in prose (`/model:foo` never runs `/model`).
+ * collisions, `/base:<name>` only reaches a builtin when that builtin takes
+ * arguments, and never for a hint namespace (`/model:foo` is prose, so the
+ * extension named `model:foo` is reachable).
  */
 export function isAcpBuiltinShadowedName(name: string): boolean {
 	if (ACP_BUILTIN_RESERVED_NAMES.has(name)) return true;
 	const colon = name.indexOf(":");
 	if (colon === -1) return false;
 	const base = name.slice(0, colon);
-	return lookupBuiltinSlashCommand(base)?.aliases?.includes(`${base}:`) === true;
+	if (startsWithHintNamespace(`/${base}:`)) return false;
+	return lookupBuiltinSlashCommand(base)?.allowArgs === true;
 }
 
 /**
