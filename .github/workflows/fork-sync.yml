@@ -40,11 +40,21 @@ env:
   OMP_TEST_TIMEOUT: "120"
   # CI runs test chunks one at a time and stops at the first failure unless this
   # is set (scripts/ci-test-ts.ts: `pooled = ... (!isCI() || explicitConcurrency)`).
-  # Pooled, every failing chunk is collected into one report. The 111-chunk
-  # native/tooling/browser bucket dominates wall clock, so 16 slots halve it;
-  # each chunk is one bun process (~1 GB, ~1 core), and the VM is 40 cores with
-  # the org runners sharing it — do not go much past this.
-  OMP_TEST_CONCURRENCY: "16"
+  # Pooled, every failing chunk is collected into one report. Each chunk is one
+  # bun process (~1 GB, ~1 core) and the rust chunk runs nextest across every
+  # core beside them, so the pool has to leave room for the tests that assert a
+  # narrow timing window: at 16 slots three gated runs (43787951052,
+  # 43790447884, 43793027457) each failed on a *different* upstream test of that
+  # kind — cli-responses-websocket-recovery (socket replacement),
+  # browser-tern-dom (notEditable), pi-natives dropping_the_caller_stops_the_walk
+  # (60 ms window against a 200 ms sleep), sdk-tool-activation (timed-out
+  # activation) — and never on fork code. 8 slots halve the overlap and roughly
+  # double the suite's wall clock, which a daily cron can afford.
+  OMP_TEST_CONCURRENCY: "8"
+  # nextest's env form of `--test-threads`. Uncapped, the rust chunk saturates
+  # every core while the TS chunks run beside it, which is the same oversub-
+  # scription the slot count above is trimmed for.
+  NEXTEST_TEST_THREADS: "8"
   # Per-chunk watchdog (scripts/ci-test-ts.ts chunkTimeoutMs, default 600). The
   # Rust chunk is one pooled command that compiles the whole workspace before
   # nextest starts: ~10 min cold, because checkout's `git clean` drops target/.
