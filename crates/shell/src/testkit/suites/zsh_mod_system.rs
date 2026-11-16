@@ -110,10 +110,27 @@ fn zsh_mod_system_syswrite_to_a_closed_pipe_is_epipe() {
 	assert_eq!(st, 0);
 }
 
+/// The host libc's `strerror(errno)` text.
+///
+/// The texts for errno 41 and 134 are release-dependent: glibc 2.39 has no
+/// name for either and answers `Unknown error 41`/`134`, glibc 2.44 names
+/// 134. Both probes below are checked against the host rather than pinned to
+/// one release's wording.
+#[cfg(unix)]
+fn host_strerror(errno: i32) -> String {
+	// SAFETY: `strerror` returns a pointer to a static NUL-terminated string
+	// that stays valid until this thread's next `strerror` call; copy it out
+	// before anything else can run.
+	unsafe { std::ffi::CStr::from_ptr(libc::strerror(errno)) }
+		.to_string_lossy()
+		.into_owned()
+}
+
 /// `syserror` prints glibc's texts on Linux and, from its own table, off
 /// Unix: a number the table has always had, one it once lacked (`EIO`,
 /// `EPIPE`), and one outside it.
 #[test]
+#[cfg(unix)]
 #[cfg_attr(target_os = "macos", ignore = "`strerror` text is macOS libc's")]
 fn zsh_mod_system_syserror_texts_match_glibc() {
 	let (out, err, st) = zsh(
@@ -121,11 +138,13 @@ fn zsh_mod_system_syserror_texts_match_glibc() {
 		 41; syserror ENOTRECOVERABLE; syserror 134; syserror 0",
 	);
 	assert_eq!(out, "");
-	assert_eq!(
-		err,
+	let expected = format!(
 		"No such file or directory\nInput/output error\nBroken pipe\nToo many levels of symbolic \
-		 links\nUnknown error 41\nState not recoverable\nUnknown error 134\nSuccess\n"
+		 links\n{}\nState not recoverable\n{}\nSuccess\n",
+		host_strerror(41),
+		host_strerror(134),
 	);
+	assert_eq!(err, expected);
 	assert_eq!(st, 0);
 }
 
