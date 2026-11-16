@@ -1251,4 +1251,97 @@ describe("trySyncSlashCompletion", () => {
 		expect(provider.getInlineHint(["/onboarding pro"], 0, "/onboarding pro".length)).toBe("viders");
 		expect(provider.getInlineHint(["  /onboarding pro"], 0, "  /onboarding pro".length)).toBe("viders");
 	});
+
+	describe("inline hint namespaces", () => {
+		const AGENTS = ["oracle", "reviewer", "scout"];
+		const MODELS = ["anthropic/claude-sonnet", "deepseek/deepseek-flash"];
+		const FILES = ["plans/x.md", "src/fi.ts"];
+
+		const namespaces = [
+			{
+				prefix: "agent:",
+				getCompletions: (query: string) => {
+					const lower = query.toLowerCase();
+					return AGENTS.filter(name => name.includes(lower)).map(name => ({
+						value: `agent:${name}`,
+						label: name,
+					}));
+				},
+			},
+			{
+				prefix: "model:",
+				getCompletions: (query: string) => {
+					const lower = query.toLowerCase();
+					return MODELS.filter(id => id.includes(lower)).map(id => ({ value: `model:${id}`, label: id }));
+				},
+			},
+			{
+				prefix: "local:",
+				getCompletions: (query: string) => {
+					const lower = query.toLowerCase();
+					return FILES.filter(name => name.includes(lower)).map(name => ({ value: `local:${name}`, label: name }));
+				},
+			},
+		];
+
+		const createProvider = () =>
+			new CombinedAutocompleteProvider([{ name: "model", description: "Switch model" }], "/tmp", { namespaces });
+
+		it("completes a hint token that opens the draft", async () => {
+			const provider = createProvider();
+			const line = "/agent:";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result?.prefix).toBe("/agent:");
+			expect(result?.items.map(item => item.value)).toEqual(["agent:oracle", "agent:reviewer", "agent:scout"]);
+		});
+
+		it("keeps listing after a slash inside the query", async () => {
+			const provider = createProvider();
+			const line = "/local:src/fi";
+
+			const result = await provider.getSuggestions([line], 0, line.length);
+
+			expect(result?.items.map(item => item.value)).toEqual(["local:src/fi.ts"]);
+		});
+
+		it("completes a mid-prompt hint token and keeps the prose", async () => {
+			const provider = createProvider();
+			const line = "spawn three /agent:sco";
+			const suggestions = await provider.getSuggestions([line], 0, line.length);
+			const selected = suggestions?.items[0];
+			if (!selected || !suggestions) throw new Error("expected an agent candidate");
+
+			const applied = provider.applyCompletion([line], 0, line.length, selected, suggestions.prefix);
+
+			expect(applied.lines[0]).toBe("spawn three /agent:scout ");
+			expect(applied.cursorCol).toBe("spawn three /agent:scout ".length);
+		});
+
+		it("returns nothing instead of falling through to path completion", async () => {
+			const provider = createProvider();
+			const line = "/agent:nobody";
+
+			expect(await provider.getSuggestions([line], 0, line.length)).toBeNull();
+		});
+
+		it("reports hint tokens and values so the editor never dispatches them", () => {
+			const provider = createProvider();
+
+			expect(provider.isNamespaceToken("/agent:sc")).toBe(true);
+			expect(provider.isNamespaceToken("do it /local:x")).toBe(true);
+			expect(provider.isNamespaceToken("/btw:hi")).toBe(false);
+			expect(provider.isNamespaceValue("agent:scout")).toBe(true);
+			expect(provider.isNamespaceValue("skill:reviewer")).toBe(false);
+		});
+
+		it("leaves a namespace the gate does not declare to normal handling", async () => {
+			const provider = createProvider();
+			const line = "/btw:hi";
+
+			expect(await provider.getSuggestions([line], 0, line.length)).toBeNull();
+			expect(provider.trySyncSlashCompletion?.(line)).toBeNull();
+		});
+	});
 });

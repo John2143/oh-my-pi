@@ -34,6 +34,8 @@ import {
 } from "../../extensibility/extensions";
 import {
 	type BuiltSkillPromptMessage,
+	getSkillSlashCommandName,
+	type LoadedSkillPrompt,
 	loadSkillPrompt,
 	parseSkillInvocation,
 	type Skill,
@@ -254,13 +256,14 @@ export type RpcSessionChangeSession = Pick<AgentSession, "newSession" | "switchS
 
 export type RpcSkillCommandSession = Pick<
 	AgentSession,
-	"buildUserSkillPrompt" | "renderUserSkillPrompt" | "promptCustomMessage" | "skills" | "skillsSettings"
+	"buildUserSkillPrompts" | "renderUserSkillPrompts" | "promptCustomMessage" | "skills" | "skillsSettings"
 > &
 	SkillRediscoverySource;
 export type RpcSkillCommandResult = { agentInvoked: true };
 
 export interface RpcSkillInvocation extends SkillPromptInput {
-	skill: Skill;
+	/** Every invoked skill that resolved, in draft order. */
+	skills: readonly Skill[];
 	queueChipText: string;
 }
 
@@ -273,9 +276,17 @@ export function resolveRpcSkillInvocation(session: RpcSkillCommandSession, text:
 	if (!session.skillsSettings?.enableSkillCommands) return null;
 	const parsed = parseSkillInvocation(text);
 	if (!parsed) return null;
-	const skill = session.skills.find(candidate => candidate.name === parsed.name);
-	if (!skill) return null;
-	return { skill, args: parsed.args, prompt: parsed.prompt, queueChipText: text };
+	const skills: Skill[] = [];
+	const seen = new Set<string>();
+	for (const name of parsed.names) {
+		const command = getSkillSlashCommandName({ name });
+		const skill = session.skills.find(candidate => getSkillSlashCommandName(candidate) === command);
+		if (!skill || seen.has(skill.name)) continue;
+		seen.add(skill.name);
+		skills.push(skill);
+	}
+	if (skills.length === 0) return null;
+	return { skills, args: parsed.args, prompt: parsed.prompt, queueChipText: text };
 }
 
 /**
@@ -293,7 +304,7 @@ export async function runRpcSkillCommand(
 	onPromptAdmitted?: () => void,
 	images?: ImageContent[],
 ): Promise<boolean> {
-	const built = prebuilt ?? (await session.buildUserSkillPrompt(invocation.skill, invocation));
+	const built = prebuilt ?? (await session.buildUserSkillPrompts(invocation.skills, invocation));
 	return session.promptCustomMessage(
 		{
 			customType: SKILL_PROMPT_MESSAGE_TYPE,
@@ -335,9 +346,10 @@ export async function dispatchRpcSkillPrompt(input: {
 	// still fails immediately (a stale one is read from its rediscovered
 	// replacement first). Rendering (and authorizing model tags) happens
 	// only after the in-flight submission survives the currentness check.
-	const loaded = await loadSkillPrompt(invocation.skill, input.session);
+	const loaded: LoadedSkillPrompt[] = [];
+	for (const skill of invocation.skills) loaded.push(await loadSkillPrompt(skill, input.session));
 	if (input.isCurrent && !input.isCurrent()) return "cancelled";
-	const built = input.session.renderUserSkillPrompt(loaded.skill, invocation, loaded.body);
+	const built = input.session.renderUserSkillPrompts(loaded, invocation);
 	// A failure before admission still resolves this wait (without rejecting this
 	// call) — reportPromptResult already routed it to onError and a failed prompt_result.
 	await watchAndReportPromptResult({

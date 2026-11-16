@@ -21,6 +21,7 @@ import { BUILTIN_MODE_SLASH_COMMANDS } from "./builtin-modes";
 import { BUILTIN_SESSION_SLASH_COMMANDS } from "./builtin-session";
 import { BUILTIN_SKILLS_SLASH_COMMANDS } from "./builtin-skills";
 import { parseSlashCommand } from "./helpers/parse";
+import { startsWithHintNamespace } from "@oh-my-pi/pi-tui/prompt/skill-tokens";
 import type {
 	BuiltinSlashCommand,
 	ParsedSlashCommand,
@@ -148,11 +149,9 @@ export async function executeBuiltinSlashCommand(
 	text: string,
 	runtime: BuiltinSlashCommandRuntime,
 ): Promise<string | boolean> {
-	const parsed = parseSlashCommand(text);
-	if (!parsed) return false;
-
-	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
-	if (!command) return false;
+	const resolved = resolveBuiltinInvocation(text);
+	if (!resolved) return false;
+	const { command, parsed } = resolved;
 	if (parsed.args.length > 0 && !command.allowArgs) {
 		return false;
 	}
@@ -204,6 +203,24 @@ export async function executeBuiltinSlashCommand(
 /** Look up a unified spec by name or alias. Used by the ACP dispatcher. */
 export function lookupBuiltinSlashCommand(name: string): SlashCommandSpec | undefined {
 	return BUILTIN_SLASH_COMMAND_LOOKUP.get(name);
+}
+
+/**
+ * Resolve `text` to a builtin command. `parseSlashCommand` splits on the first
+ * whitespace or colon, so `/foo:bar` is `/foo` with argument `bar` — except for
+ * the hint namespaces (`/agent:`, `/model:`, `/local:`), whose colon form is
+ * prose the model reads rather than a command: `/local:x` must reach the model,
+ * while `/local x` still opens the file picker.
+ */
+export function resolveBuiltinInvocation(
+	text: string,
+): { command: SlashCommandSpec; parsed: ParsedSlashCommand } | undefined {
+	if (startsWithHintNamespace(text)) return undefined;
+	const parsed = parseSlashCommand(text);
+	if (!parsed) return undefined;
+	const command = BUILTIN_SLASH_COMMAND_LOOKUP.get(parsed.name);
+	if (!command) return undefined;
+	return { command, parsed };
 }
 
 export type { ParsedSlashCommand, SlashCommandResult, SlashCommandRuntime, SlashCommandSpec, TuiSlashCommandRuntime };

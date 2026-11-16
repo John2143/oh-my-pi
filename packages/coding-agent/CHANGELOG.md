@@ -2,6 +2,15 @@
 
 ## [Unreleased]
 
+### Added
+
+- Invoking several `/skill:<name>` tokens in one draft now attaches every named skill's instructions above the request, and the draft reaches the model with every token in place ([#4](https://github.com/John2143/oh-my-pi/pull/4))
+- `/agent:<name>`, `/model:<selector>`, and `/local:<path>` complete inline as hints to the model: they read as prose the model may act on, never as commands that run locally ([#4](https://github.com/John2143/oh-my-pi/pull/4))
+
+### Changed
+
+- `/model:` and `/local:` are hints now: the colon form reaches the model, while `/model x` and `/local x` still run those commands; every other command keeps colon arguments (`/switch:sonnet`, `/btw:hi`, `/force:bash`) ([#4](https://github.com/John2143/oh-my-pi/pull/4))
+
 ## [18.20.3] - 2026-11-16
 
 ### Breaking Changes
