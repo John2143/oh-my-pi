@@ -147,14 +147,14 @@ Ubuntu CI just happens to match the pinned wording.
 
 ## Replay Instructions
 
-The branch is a plain rebase of 27 fork commits onto `upstream/main` — eight
+The branch is a plain rebase of 28 fork commits onto `upstream/main` — eight
 patch commits covering six patches, plus the CI and docs commits that record
 them:
 
 ```bash
 git fetch upstream main
 git rebase upstream/main                              # what fork-sync runs; manual only on conflict
-git log --oneline --reverse upstream/main..origin/john # 27 commits, oldest first
+git log --oneline --reverse upstream/main..origin/john # 28 commits, oldest first
 ```
 
 Because the tip is rebased, every hash in this file moves on each upstream bump:
