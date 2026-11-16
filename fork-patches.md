@@ -1,14 +1,14 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` (version 18.20.0 at the time of writing). `fork-sync`
+Rebased onto `upstream/main` (version 18.20.2 at the time of writing). `fork-sync`
 moves the base forward daily and rewrites every commit hash below, so read the
 hashes and line hints here as "as of the last hand rebase" — the current tip is
 whatever `git log -1 origin/john` and the last green run say. This documents every change we maintain, why it exists, and where to find it.
 
 
-The fork carries five patches in seven commits. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
+The fork carries six patches in eight commits. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
 
-## Patch 1: exit_loop_mode Tool (`ab0bf55501`)
+## Patch 1: exit_loop_mode Tool (`f7cf32b73b`)
 
 **Why**: Upstream's `/loop` mode auto-repeats a prompt but the agent has no way to stop on its own — only the user can exit (Esc or `/loop` again). Our skills (`web-researcher`, `security-engineer`) run inside `/loop` and need to end the loop themselves once the work is verifiably complete, so the agent gets a tool for it.
 
@@ -31,7 +31,7 @@ The fork carries five patches in seven commits. Everything else the fork used to
 
 **Port notes vs the 16.3.11 version** (`74ac4a051`): v18 declares `disableLoopMode` synchronous across ~6 call sites, so it was not ported to async — deactivation is fire-and-forget there and the tool's own guard covers the gap. Activation is awaited instead, because `setActiveToolsByName` drops unknown names and a raced activation would hide the tool during iteration 1. Registration is eager rather than lazy: it runs before the blanket `ExtensionToolWrapper` pass, so the entry gets the approval gate like every other built-in.
 
-## Patch 2: read-only config in setup scenes (`e1f26ef53a`)
+## Patch 2: read-only config in setup scenes (`c0ca41f462`)
 
 **Why**: `Settings.flush()` rethrows write failures by contract — the upstream settings tests assert rejections for `ELOOP`, `ENOTDIR` and invalid configs — and all three setup-scene flushes awaited it unguarded. A home-manager-managed `config.yml` is a symlink into the read-only nix store, so finishing the setup wizard rejected with `EROFS` and the TUI reported it as an unhandled rejection (the write lands next to the *resolved* target, i.e. inside `/nix/store`). Selectors and the session-move path already catch this and show a clean error; only the wizard was unguarded.
 
@@ -41,7 +41,7 @@ The fork carries five patches in seven commits. Everything else the fork used to
 
 **Port note**: the first attempt guarded `flush()` itself; that widens a documented contract and breaks the upstream rejection tests, so the guard belongs at the UI call site instead.
 
-## Patch 3: NixOS portability (`9e5b9d7e3e`, `699e902907`)
+## Patch 3: NixOS portability (`0c832bff5a`, `0c0372ddb3`)
 
 **Why**: `_resolve_bash()` in `packages/coding-agent/src/eval/py/runner.py` returned
 the hardcoded `/bin/bash` on every non-Windows host. NixOS has no `/bin/bash` (only
@@ -60,7 +60,7 @@ the fixtures in `config-value-fd-inheritance.test.ts`.
 Verified by running `packages/coding-agent/test/eval/py/runner-shell-output.test.ts`
 on NixOS: 2 failing cases before, 7/7 after.
 
-## Patch 4: FHS programs on a stat-blind /bin (`97e57ecf3d`, `53b28a7220`)
+## Patch 4: FHS programs on a stat-blind /bin (`f408f78dba`, `4e5040e27e`)
 
 **Why**: NixOS has no FHS `/bin`. `services.envfs` (dotfiles, the `github` runner
 VM) serves `/bin/<tool>` for `execve` by resolving `<tool>` in the *requesting*
@@ -97,7 +97,7 @@ machine with envfs.
 **Worth upstreaming**: the `locate()` change is a real portability fix for any
 `execve`-only filesystem; the dev-shell one is NixOS-specific.
 
-## Patch 5: wait for the prompt before typing ^D (`538a8deff9`)
+## Patch 5: wait for the prompt before typing ^D (`94da38433f`)
 
 **Why**: `eof_on_an_empty_line_exits` typed ^D the moment obash was spawned.
 While the terminal is still canonical, the line discipline turns that ^D into a
@@ -115,6 +115,28 @@ CI never sees it because the Rust chunk self-skips on `main`.
 
 **Worth upstreaming**: yes — a test race, not a fork preference.
 
+## Patch 6: host-libc `strerror` text in the zsh/system test (`9fcb2f93d1`)
+
+**Why**: upstream's `zsh_mod_system_syserror_texts_match_glibc` pinned the
+`syserror` texts for errno 41 and 134 to `Unknown error 41` / `Unknown error
+134`, which is glibc 2.39's wording — upstream CI is Ubuntu. glibc 2.44 names
+134 (`Inappropriate file type or format`), and `pi-shell` prints whatever the
+host libc says (`strerror_of` in `bash/vm/builtins/zsh_mod_system.rs`, on top of
+`strerror` in `bash/diag.rs`), so the assertion fails on any newer glibc.
+`fork-sync` run 43715351804 failed on exactly this test and never pushed `john`,
+freezing the fork at `ef38c94`.
+
+**Behaviour**: the two release-dependent texts are asked of the host —
+`host_strerror(errno)` copies `libc::strerror`'s static buffer — and the
+expectation is built with `format!`; the four texts glibc has always named stay
+literal, so the ordering and the four stable probes are still pinned. The helper
+and the test are `#[cfg(unix)]`, so neither exists on Windows.
+
+**Files**: `crates/pi-shell/src/testkit/suites/zsh_mod_system.rs`.
+
+**Worth upstreaming**: yes — the assertion is host-dependent upstream too;
+Ubuntu CI just happens to match the pinned wording.
+
 ## No Longer Carried
 
 - **Nix build system** — upstream ships `flake.nix`, `nix/package.nix`, `nix/bun.nix`, `nix/dev-shell.nix`, `nix/home-manager.nix`, `nix/nixos-module.nix` and exposes `packages.<system>.omp`, so the dotfiles wrapper resolves against upstream's own derivation. The old `nix/omp.nix` + `#private`-field sed workarounds for bun 1.3.13 are obsolete.
@@ -125,19 +147,20 @@ CI never sees it because the Rust chunk self-skips on `main`.
 
 ## Replay Instructions
 
-The branch is a plain rebase of 20 fork commits onto `upstream/main` — seven
-patches plus the CI and docs commits that record them:
+The branch is a plain rebase of 27 fork commits onto `upstream/main` — eight
+patch commits covering six patches, plus the CI and docs commits that record
+them:
 
 ```bash
 git fetch upstream main
 git rebase upstream/main                              # what fork-sync runs; manual only on conflict
-git log --oneline --reverse upstream/main..origin/john # 20 commits, oldest first
+git log --oneline --reverse upstream/main..origin/john # 27 commits, oldest first
 ```
 
 Because the tip is rebased, every hash in this file moves on each upstream bump:
 identify the patch commits by subject (`feat(coding-agent): add exit_loop_mode`,
 `fix(setup)`, `fix(eval)`, `test(browser-attach)`, `test(nixos)`, `fix(shell)`,
-`test(zle)`), not by the hashes above.
+`test(zle)`, `test(shell)`), not by the hashes above.
 
 The `exit_loop_mode` patch conflicts in two places when upstream reshapes them:
 
