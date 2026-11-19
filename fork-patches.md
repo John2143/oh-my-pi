@@ -1,12 +1,12 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` (version 18.20.2 at the time of writing). `fork-sync`
+Rebased onto `upstream/main` (version 19.0.0 at the time of writing). `fork-sync`
 moves the base forward daily and rewrites every commit hash below, so read the
 hashes and line hints here as "as of the last hand rebase" — the current tip is
 whatever `git log -1 origin/john` and the last green run say. This documents every change we maintain, why it exists, and where to find it.
 
 
-The fork carries six patches in eight commits. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
+The fork carries five patches in seven commits. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
 
 ## Patch 1: exit_loop_mode Tool (`f7cf32b73b`)
 
@@ -67,16 +67,16 @@ VM) serves `/bin/<tool>` for `execve` by resolving `<tool>` in the *requesting*
 process's `PATH`, and falls back to a directory of the common tools when the
 process has no `PATH` at all. Two gaps survived, both only reachable from the
 Rust suite (`bun run test` runs `cargo nextest` as one more chunk):
-- `pi-builtins`' command runner `stat(2)`ed an absolute `argv[0]` before
+- `omp-builtins`' command runner `stat(2)`ed an absolute `argv[0]` before
   spawning it. envfs answers `execve`, never `stat`, so `/bin/pwd` — find's
   `-exec` fixture, `find::tests::exec_uses_shell_cwd_and_captures_child_stdout`
   — read as missing and the test failed with "Failed to run /bin/pwd: No such
   file or directory" without ever spawning anything.
-- `pi-vcs`' git-runner fixtures assert their process group with
+- `omp-vcs`' git-runner fixtures assert their process group with
   `alias.pgid=!ps -o pgid= -p $$`, and the dev shell had no `procps`, so git's
   shell answered "ps: command not found".
 - envfs sets a process's `comm` to the path it was asked for, so a sleeper
-  started as `/bin/sleep` reported name `/bin/sleep`, not `sleep`. `pi-shell`'s
+  started as `/bin/sleep` reported name `/bin/sleep`, not `sleep`. `omp-shell`'s
   spawn and cancel fixtures match that bare name, so they timed out waiting for
   a `sleep` that never appeared.
 - Two fixtures ran a *bare* command from a `PATH`-less shell (`cat /dev/fd/63`
@@ -90,8 +90,8 @@ really is absent, so nothing is masked. `parse_stat` keeps the last component of
 `comm`, which is what every FHS system reports. `procps` joins the dev shell
 packages, and the two fixtures use absolute paths.
 
-**Verified by**: `cargo nextest run -p pi-builtins -E 'test(exec_uses_shell_cwd)'`
-and the `pi-vcs` git-runner tests on the `github` runner VM, which is the only
+**Verified by**: `cargo nextest run -p omp-builtins -E 'test(exec_uses_shell_cwd)'`
+and the `omp-vcs` git-runner tests on the `github` runner VM, which is the only
 machine with envfs.
 
 **Worth upstreaming**: the `locate()` change is a real portability fix for any
@@ -102,7 +102,7 @@ machine with envfs.
 **Why**: upstream's `zsh_mod_system_syserror_texts_match_glibc` pinned the
 `syserror` texts for errno 41 and 134 to `Unknown error 41` / `Unknown error
 134`, which is glibc 2.39's wording — upstream CI is Ubuntu. glibc 2.44 names
-134 (`Inappropriate file type or format`), and `pi-shell` prints whatever the
+134 (`Inappropriate file type or format`), and `omp-shell` prints whatever the
 host libc says (`strerror_of` in `bash/vm/builtins/zsh_mod_system.rs`, on top of
 `strerror` in `bash/diag.rs`), so the assertion fails on any newer glibc.
 `fork-sync` run 43715351804 failed on exactly this test and never pushed `john`,
@@ -126,11 +126,17 @@ Ubuntu CI just happens to match the pinned wording.
 - **Skill-in-loop routing** — upstream fixed it natively: `armLoopAutoSubmit` (`modes/interactive-mode.ts`) plus callers in `input-controller.ts` and `ui-helpers.ts` re-arm the loop for `/skill:` commands that dispatch inline.
 - **Anthropic fingerprint commits** (`claudeCodeVersion` bump, OAuth custom Anthropic models) — `claudeCodeVersion` is gone from the provider; `claude-code-fingerprint.ts` adopts the version the server demands, and `auth: oauth` on a custom provider is allowed in `config/models-config.ts`.
 - **`inspect_image` tool** — the fork shipped `tools/inspect-image.ts`, its two prompts, a renderer, a collab-web renderer and a test. Upstream retired the tool and built the capability into `read`: `read <image>?q=<question>` answers via a vision model resolved `@vision` -> `@default` -> active model (`utils/image-question.ts`, timeout `images.questionTimeoutMs`). v18 also migrates the old `inspect_image.*` settings away (`config/settings.ts`), so the dotfiles key was removed rather than ported.
+- **The probe^D test race** — the fork's `test(zle)` commit waited for the prompt
+  before typing `^D` in `eof_on_an_empty_line_exits`. Upstream fixed the same
+  race itself in `e1ec8e1159` (`fix(pi-shell): ensured terminal is in
+  non-canonical mode before input`) by waiting on `wait_raw(TIMEOUT)` before
+  the first key, so the patch was dropped on the 19.0.0 replay rather than
+  re-anchored.
 
 ## Replay Instructions
 
-The branch is a plain rebase of 28 fork commits onto `upstream/main` — eight
-patch commits covering six patches, plus the CI and docs commits that record
+The branch is a plain rebase of 28 fork commits onto `upstream/main` — seven
+patch commits covering five patches, plus the CI and docs commits that record
 them:
 
 ```bash
@@ -142,7 +148,7 @@ git log --oneline --reverse upstream/main..origin/john # 28 commits, oldest firs
 Because the tip is rebased, every hash in this file moves on each upstream bump:
 identify the patch commits by subject (`feat(coding-agent): add exit_loop_mode`,
 `fix(setup)`, `fix(eval)`, `test(browser-attach)`, `test(nixos)`, `fix(shell)`,
-`test(zle)`, `test(shell)`), not by the hashes above.
+`test(shell)`), not by the hashes above.
 
 The `exit_loop_mode` patch conflicts in two places when upstream reshapes them:
 
