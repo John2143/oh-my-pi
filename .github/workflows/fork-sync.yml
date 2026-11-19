@@ -46,7 +46,7 @@ env:
   # narrow timing window: at 16 slots three gated runs (43787951052,
   # 43790447884, 43793027457) each failed on a *different* upstream test of that
   # kind — cli-responses-websocket-recovery (socket replacement),
-  # browser-tern-dom (notEditable), pi-natives dropping_the_caller_stops_the_walk
+  # browser-tern-dom (notEditable), omp-natives dropping_the_caller_stops_the_walk
   # (60 ms window against a 200 ms sleep), sdk-tool-activation (timed-out
   # activation) — and never on fork code. 8 slots halve the overlap and roughly
   # double the suite's wall clock, which a daily cron can afford.
