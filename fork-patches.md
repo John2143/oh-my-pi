@@ -1,6 +1,6 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` (version 19.0.0 at the time of writing). `fork-sync`
+Rebased onto `upstream/main` (`26702495a5`, 2026-11-24, version 19.1.1). `fork-sync`
 moves the base forward daily and rewrites every commit hash below, so read the
 hashes and line hints here as "as of the last hand rebase" — the current tip is
 whatever `git log -1 origin/john` and the last green run say. This documents every change we maintain, why it exists, and where to find it.
@@ -33,10 +33,10 @@ The fork carries five patches in seven commits. Everything else the fork used to
 
 ## Patch 2: read-only config in setup scenes (`c0ca41f462`)
 
-**Why**: `Settings.flush()` rethrows write failures by contract — the upstream settings tests assert rejections for `ELOOP`, `ENOTDIR` and invalid configs — and all three setup-scene flushes awaited it unguarded. A home-manager-managed `config.yml` is a symlink into the read-only nix store, so finishing the setup wizard rejected with `EROFS` and the TUI reported it as an unhandled rejection (the write lands next to the *resolved* target, i.e. inside `/nix/store`). Selectors and the session-move path already catch this and show a clean error; only the wizard was unguarded.
+**Why**: `Settings.flush()` rethrows write failures by contract — the upstream settings tests assert rejections for `ELOOP`, `ENOTDIR` and invalid configs — and every setup-scene flush awaited it unguarded. A home-manager-managed `config.yml` is a symlink into the read-only nix store, so finishing the setup wizard rejected with `EROFS` and the TUI reported it as an unhandled rejection (the write lands next to the *resolved* target, i.e. inside `/nix/store`). Selectors and the session-move path already catch this and show a clean error; only the wizard was unguarded.
 
 **Files**:
-- `packages/coding-agent/src/modes/setup.ts` — `flushSetupSettings()` helper logs `Setup: failed to persist settings`; `selectModel`, `saveComposerShape` and `markSetupWizardComplete` route through it, so the in-memory setting still advances and only persistence is skipped.
+- `packages/coding-agent/src/modes/setup.ts` — `flushSetupSettings()` helper logs `Setup: failed to persist settings`; `saveComposerShape`, `saveAutoUpdate`, `selectModel` and `markSetupWizardComplete` route through it, so the in-memory setting still advances and only persistence is skipped.
 - `packages/coding-agent/test/setup-wizard-readonly-config.test.ts` — NEW: symlinks `config.yml` into an unwritable directory and asserts completion warns rather than rejects, with nothing written to the store.
 
 **Port note**: the first attempt guarded `flush()` itself; that widens a documented contract and breaks the upstream rejection tests, so the guard belongs at the UI call site instead.
@@ -135,14 +135,19 @@ Ubuntu CI just happens to match the pinned wording.
 
 ## Replay Instructions
 
-The branch is a plain rebase of 28 fork commits onto `upstream/main` — seven
+The branch is a plain rebase of 30 fork commits onto `upstream/main` — seven
 patch commits covering five patches, plus the CI and docs commits that record
 them:
 
 ```bash
 git fetch upstream main
-git rebase upstream/main                              # what fork-sync runs; manual only on conflict
-git log --oneline --reverse upstream/main..origin/john # 28 commits, oldest first
+# Same base fork-sync picks: the newest `upstream/main` commit whose own CI passed.
+GREEN=$(curl -fsS -H "Authorization: Bearer $(gh auth token)" \
+  -H "Accept: application/vnd.github+json" \
+  "https://api.github.com/repos/can1357/oh-my-pi/actions/workflows/ci.yml/runs?branch=main&status=success&event=push&per_page=1" \
+  | jq -r '.workflow_runs[0].head_sha')
+git rebase "$GREEN"                                   # manual only on conflict
+git log --oneline --reverse "$GREEN"..origin/john      # 30 commits, oldest first
 ```
 
 Because the tip is rebased, every hash in this file moves on each upstream bump:
@@ -156,20 +161,25 @@ The `exit_loop_mode` patch conflicts in two places when upstream reshapes them:
   — keep upstream's imports and add
   `import type { ExitLoopModeDetails } from "../../tools/exit-loop-mode";` beside
   the other `../../tools/` imports — at the last hand rebase that landed directly
-  after `import { writeDeviceDispatch } from "../../tools/resolve";`;
+  after `import type { TodoPhase } from "../../tools/details/todo";`;
 - `packages/coding-agent/src/tools/builtin-names.ts` — upstream added the
   `BUILTIN_TOOL_HELP` map keyed by `BuiltinToolName`; keep it verbatim and only
   extend `HIDDEN_TOOL_NAMES` with `"exit_loop_mode"`. A hidden tool needs no help
   entry: `test/tools/builtin-defaults.test.ts` walks `BUILTIN_TOOL_NAMES` only.
+
+Other drift the rebase has needed: `ExitLoopModeTool` imports `ToolError` from
+`./tool-errors` beside it, not from `@oh-my-pi/pi-tui` — upstream moved the class
+into the coding agent between 19.0 and 19.1, so a rebase across that boundary
+fails the typecheck until the import follows it.
 
 Expect the same class of conflict on a later upstream: the anchors are
 `HIDDEN_TOOL_NAMES`, `HIDDEN_TOOLS`, the `toolSession` literal, the eager `goal`
 registration block, `requestedActiveToolNames`, `AgentSession`'s mode-state
 accessors, `#enableLoopMode`/`disableLoopMode`, and `#handleToolExecutionEnd` —
 the behaviour block is that method's last statement, immediately above its
-closing brace and `async #handleAgentEnd`. The setup patch anchors are the three
-`ctx.settings.flush()` call sites plus `markSetupWizardComplete` in
-`modes/setup.ts`.
+closing brace and `async #handleAgentEnd`. The setup patch anchors are the four
+`settings.flush()` call sites (`saveComposerShape`, `saveAutoUpdate`, `selectModel`,
+`markSetupWizardComplete`) in `modes/setup.ts`.
 
 ## Fork-only CI (`.github/workflows/fork-sync.yml`)
 
