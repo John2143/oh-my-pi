@@ -15,6 +15,14 @@ name: Fork sync
 # points at them — `nix develop` then dies with "store path ... does not exist"
 # instead of re-instantiating. Re-evaluating costs seconds; the cache costs the
 # whole run.
+#
+# `--fallback` on every nix call is deliberate too: the rust-overlay components
+# of the dev shell (`rust-std` for the Windows targets, `rust-docs`) live only
+# on the NAS substituter, and when that cache is degraded nix gives up with
+# "HTTP error 200 (curl error: Timeout was reached)" rather than fetch the
+# component tarballs from static.rust-lang.org. A failed substitute is not a
+# failed gate: `--fallback` lets nix install those components from the upstream
+# dist tarballs instead (~6 min cold, once per GC).
 
 on:
   schedule:
@@ -171,15 +179,15 @@ jobs:
 
       - name: Install dependencies
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop --no-eval-cache .#default -c bun install --frozen-lockfile
+        run: nix develop --fallback --no-eval-cache .#default -c bun install --frozen-lockfile
 
       - name: Typecheck
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop --no-eval-cache .#default -c bun run ci:check:full
+        run: nix develop --fallback --no-eval-cache .#default -c bun run ci:check:full
 
       - name: Build native addons
         if: steps.rebase.outputs.changed == 'yes'
-        run: nix develop --no-eval-cache .#default -c bun run build:native
+        run: nix develop --fallback --no-eval-cache .#default -c bun run build:native
 
       - name: Full test suite
         if: steps.rebase.outputs.changed == 'yes'
@@ -192,9 +200,9 @@ jobs:
           # does, so the fixture never writes the pid file and two of its tests
           # fail here only (run 43338531530). Resolved from the flake's own
           # nixpkgs so the C++-less-shell path does not depend on the registry.
-          PERL_BIN=$(nix build --no-link --print-out-paths --inputs-from . nixpkgs#perl \
+          PERL_BIN=$(nix build --fallback --no-link --print-out-paths --inputs-from . nixpkgs#perl \
             | grep -v -- '-man$' | head -1)/bin
-          nix develop --no-eval-cache .#default -c bash -c "export PATH=$PERL_BIN:\$PATH; bun run test"
+          nix develop --fallback --no-eval-cache .#default -c bash -c "export PATH=$PERL_BIN:\$PATH; bun run test"
 
       - name: Push john
         if: steps.rebase.outputs.changed == 'yes'
