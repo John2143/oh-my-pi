@@ -1,12 +1,12 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` (`26702495a5`, 2026-11-24, version 19.1.1). `fork-sync`
+Rebased onto `upstream/main` (`a28d947a72`, 2026-11-25, version 19.2.1). `fork-sync`
 moves the base forward daily and rewrites every commit hash below, so read the
 hashes and line hints here as "as of the last hand rebase" — the current tip is
 whatever `git log -1 origin/john` and the last green run say. This documents every change we maintain, why it exists, and where to find it.
 
 
-The fork carries five patches in seven commits. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
+The fork carries six patches, plus the CI and documentation commits that keep them rebased and explained. Everything else the fork used to ship was either absorbed by upstream or is no longer wanted.
 
 ## Patch 1: exit_loop_mode Tool (`f7cf32b73b`)
 
@@ -90,6 +90,15 @@ really is absent, so nothing is masked. `parse_stat` keeps the last component of
 `comm`, which is what every FHS system reports. `procps` joins the dev shell
 packages, and the two fixtures use absolute paths.
 
+The same class of gap breaks `cancel_kills_a_stopped_grandchild_in_a_session_of_its_own`,
+which upstream added in `c8fecf2d67`: its `/bin/sh -c` runs with an empty
+environment and exec'd `/usr/bin/perl`, and envfs answers execve by resolving
+the name in the *requesting* process's PATH — which that shell does not have, so
+perl was never started and the test timed out waiting for the grandchild. The
+fixture now resolves perl through `PATH` and embeds the absolute path, and
+`perl` joins the dev shell so the lookup succeeds there (both verified on the
+`github` runner: 127 before, pass in 0.45 s after).
+
 **Verified by**: `cargo nextest run -p omp-builtins -E 'test(exec_uses_shell_cwd)'`
 and the `omp-vcs` git-runner tests on the `github` runner VM, which is the only
 machine with envfs.
@@ -118,6 +127,30 @@ and the test are `#[cfg(unix)]`, so neither exists on Windows.
 
 **Worth upstreaming**: yes — the assertion is host-dependent upstream too;
 Ubuntu CI just happens to match the pinned wording.
+
+## Patch 6: sample the runtime frame once it is laid out
+
+**Why**: `running_command_keeps_the_script_it_runs_active` samples the pseudo
+view as soon as its top-level row reports `running`, then asserts the untraced
+script has at least three rows. `running` flips when the command starts; the
+`sh -c` script's rows are attached a moment later, so the sample can legally
+contain the command row and nothing else. Measured on the `github` runner,
+unloaded: 1 failure in 5 runs on pure `upstream/main` `a28d947a72`, and 2 in 5
+on the fork's tree — a race in the test's sampling, not in the fork. Two
+consecutive `fork-sync` gates (45776394554 and 45647041408) failed on it, which
+is what made it look like a regression.
+
+**Behaviour**: the probe waits for `running` **and** the laid-out script rows
+before it samples and stops the command. Every assertion after the sample is
+unchanged — all script rows active, the following command inactive, every raw
+source line active — so a real regression in either view still fails; the run
+now ends on the sample it was written to take instead of on a partial frame.
+The outer 10 s `timeout` still bounds a frame that never appears.
+
+**Files**: `crates/shell/src/bash/trace/viz/runtime_tests.rs`.
+
+**Worth upstreaming**: yes — the race is upstream's, and it costs their CI the
+odd red run too.
 
 ## No Longer Carried
 
