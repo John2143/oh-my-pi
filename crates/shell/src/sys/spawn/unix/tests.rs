@@ -82,6 +82,21 @@ fn sh(script: &str) -> Vec<BString> {
 	argv(&["/bin/sh", "-c", script])
 }
 
+/// Absolute path to a `perl` from `PATH`, falling back to `/usr/bin/perl`.
+///
+/// Fixture shells run with an empty environment, so a bare or FHS path cannot
+/// be resolved on hosts that keep perl elsewhere (NixOS: the store).
+fn perl() -> String {
+	std::env::var_os("PATH")
+		.and_then(|paths| {
+			std::env::split_paths(&paths)
+				.map(|dir| dir.join("perl"))
+				.find(|candidate| candidate.is_file())
+				.map(|found| found.display().to_string())
+		})
+		.unwrap_or_else(|| "/usr/bin/perl".to_owned())
+}
+
 /// Spec with null stdio, cwd `/`, the process umask, nothing ignored.
 fn spec<'a>(argv: &'a [BString], env: &'a EnvView, pgroup: PgroupSpec) -> SpawnSpec<'a> {
 	SpawnSpec {
@@ -806,7 +821,8 @@ impl Drop for KillOnDrop {
 /// kills its parent and leaves it to init before the KILL. The cancel
 /// (TERM, then the drop) must still kill it.
 ///
-/// Needs `/usr/bin/perl` (macOS and Debian-family Linux ship it) for `setsid`.
+/// Needs a `perl` carrying `POSIX` (macOS and Debian-family Linux ship one at
+/// `/usr/bin/perl`) for `setsid`.
 #[test]
 fn cancel_kills_a_stopped_grandchild_in_a_session_of_its_own() {
 	let env = EnvView::default();
@@ -814,8 +830,16 @@ fn cancel_kills_a_stopped_grandchild_in_a_session_of_its_own() {
 	let s = spawner(Sessions::Detach, grace);
 	// It ignores TERM and HUP and sleeps on once continued: only the KILL
 	// after the grace ends it, when its parent is long dead.
-	let a = sh("/usr/bin/perl -e '$SIG{HUP} = $SIG{TERM} = q(IGNORE); use POSIX (); \
-	            POSIX::setsid() > 0 or die; kill(q(STOP), $$); sleep 30' & wait");
+	//
+	// The path is absolute and resolved here because the fixture shell runs
+	// with an empty environment: NixOS has no `/usr/bin/perl`, and envfs serves
+	// `/bin/<tool>` for execve by consulting the *requesting* process's PATH,
+	// which this shell does not have.
+	let a = sh(&format!(
+		"{} -e '$SIG{{HUP}} = $SIG{{TERM}} = q(IGNORE); use POSIX (); \
+		 POSIX::setsid() > 0 or die; kill(q(STOP), $$); sleep 30' & wait",
+		perl()
+	));
 	let mut p = s.spawn(spec(&a, &env, NEW)).unwrap();
 	let pid = p.pid() as i32;
 	let inferior = KillOnDrop(child_of(pid));
