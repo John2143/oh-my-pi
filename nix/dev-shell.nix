@@ -38,6 +38,7 @@ pkgs.mkShell (
         git-lfs
         imagemagick
         openssh
+        perl
         procps
         ripgrep
         sqlite
