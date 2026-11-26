@@ -3,10 +3,12 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { fuzzyFind } from "@oh-my-pi/pi-natives";
 import { getProjectDir } from "@oh-my-pi/pi-utils";
+import { allowsSkillTokens } from "../extensibility/skill-tokens";
 
 import {
 	extractAtFilePrefix,
 	extractPathPrefix,
+	findInlineNamespace,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
 	hasPromptTextBeforeSlash,
@@ -17,8 +19,10 @@ import {
 
 export {
 	extractAtFilePrefix,
+	findInlineNamespace,
 	findLeadingSlashCommandStart,
 	findTrailingSlashCommandStart,
+	type InlineNamespaceMatch,
 	isDirectoryCompletionValue,
 	SKILL_NAMESPACE,
 	subsequenceMatch,
@@ -171,6 +175,14 @@ export interface SlashCommand {
 	getInlineHint?(argumentText: string): string | null;
 }
 
+/** A `/namespace:` token that is an advisory hint in prose, never a dispatched command. */
+export interface InlineNamespace {
+	/** Prefix including its trailing colon, e.g. `agent:`. */
+	prefix: string;
+	/** Candidates for the text after the prefix; each item's `value` includes `prefix`. */
+	getCompletions(query: string): Awaitable<readonly AutocompleteItem[]>;
+}
+
 export interface AutocompleteProvider {
 	/**
 	 * Get autocomplete suggestions for current text/cursor position. Expensive providers SHOULD stop when `signal` aborts.
@@ -214,6 +226,12 @@ export interface AutocompleteProvider {
 	 * shown mention popup never lags the typed text.
 	 */
 	trySyncModelMentionCompletion?(lines: string[], cursorLine: number, cursorCol: number): ModelMentionCompletion;
+	/** Whether the text before the cursor is a `/namespace:` hint token (see {@link InlineNamespace}). */
+	isNamespaceToken?(textBeforeCursor: string): boolean;
+	/** Whether an item's `value` belongs to a hint namespace, i.e. accepting it must not dispatch. */
+	isNamespaceValue?(value: string): boolean;
+	/** Whether `value` still matches the live `/namespace:` query at the cursor. */
+	matchesNamespaceQuery?(textBeforeCursor: string, value: string): boolean;
 	/**
 	 * Synchronously try to expand text immediately before the cursor (no async I/O).
 	 * Called after every single-character insert. Implementations MUST cheaply
@@ -246,6 +264,12 @@ type CommandEntry = SlashCommand | AutocompleteItem;
 export interface CombinedAutocompleteOptions {
 	/** Usage count per command name; higher counts rank earlier among equal text-match scores. */
 	commandUsage?: (name: string) => number;
+	/**
+	 * `/namespace:` hint tokens completed inline. They live outside the command
+	 * list because the `/` picker IS the autocomplete popup: a command entry would
+	 * make `/agent:` look dispatchable.
+	 */
+	namespaces?: readonly InlineNamespace[];
 }
 
 function getCommandName(cmd: CommandEntry): string | undefined {
@@ -509,6 +533,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 	#commands: CommandEntry[];
 	#basePath: string;
 	#commandUsage?: (name: string) => number;
+	#namespaces: readonly InlineNamespace[];
+	#namespacePrefixes: readonly string[];
 	#previousSlash?: { prefix: string; candidates: CommandEntry[] };
 	// Intentionally separate from omp-natives cache: this cache is a local,
 	// per-directory readdir fast-path for prefix completions. Global fuzzy
@@ -527,6 +553,25 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		this.#commands = commands;
 		this.#basePath = basePath;
 		this.#commandUsage = options?.commandUsage;
+		this.#namespaces = options?.namespaces ?? [];
+		this.#namespacePrefixes = this.#namespaces.map(entry => entry.prefix);
+	}
+
+	/** Whether `textBeforeCursor` ends in a `/namespace:` hint token. */
+	isNamespaceToken(textBeforeCursor: string): boolean {
+		return findInlineNamespace(textBeforeCursor, this.#namespacePrefixes) !== null;
+	}
+
+	/** Whether accepting `value` inserts a hint rather than running a command. */
+	isNamespaceValue(value: string): boolean {
+		return this.#namespaces.some(entry => value.startsWith(entry.prefix));
+	}
+
+	/** Whether `value` still satisfies the live hint query (a stale row must not be accepted). */
+	matchesNamespaceQuery(textBeforeCursor: string, value: string): boolean {
+		const namespace = findInlineNamespace(textBeforeCursor, this.#namespacePrefixes);
+		if (!namespace || !value.startsWith(namespace.prefix)) return false;
+		return value.slice(namespace.prefix.length).toLowerCase().includes(namespace.query.toLowerCase());
 	}
 
 	#submittedSlashCompletions(lowerPrefix: string): AutocompleteItem[] {
@@ -548,6 +593,19 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		if (signal?.aborted) return null;
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
+
+		const namespace = findInlineNamespace(textBeforeCursor, this.#namespacePrefixes);
+		if (namespace) {
+			// Hint tokens are prose: never complete them inside another command's
+			// arguments (`/compact /agent:x`) or a local-execution body (`!echo /agent:x`).
+			if (!allowsSkillTokens(lines[0] ?? "")) return null;
+			const source = this.#namespaces.find(entry => entry.prefix === namespace.prefix);
+			const items = source ? [...(await source.getCompletions(namespace.query))].slice(0, 20) : [];
+			if (signal?.aborted) return null;
+			// A hint token never falls through to path completion: with no candidate
+			// the popup closes and Enter sends the text as prose.
+			return items.length > 0 ? { items, prefix: textBeforeCursor.slice(namespace.start) } : null;
+		}
 
 		const leadingSlashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
@@ -701,6 +759,16 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const currentLine = lines[cursorLine] || "";
 		const textBeforeCursor = currentLine.slice(0, cursorCol);
 		const afterCursor = currentLine.slice(cursorCol);
+
+		const namespace = findInlineNamespace(textBeforeCursor, this.#namespacePrefixes);
+		if (namespace) {
+			// Replace only the live hint token; the prose around it stays put.
+			const before = currentLine.slice(0, namespace.start);
+			const insert = `/${item.value} `;
+			const newLines = [...lines];
+			newLines[cursorLine] = `${before}${insert}${afterCursor}`;
+			return { lines: newLines, cursorLine, cursorCol: before.length + insert.length };
+		}
 
 		const leadingSlashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
@@ -1180,6 +1248,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		return command.getInlineHint(argumentText);
 	}
 	trySyncSlashCompletion(textBeforeCursor: string): { items: AutocompleteItem[]; prefix: string } | null {
+		// Hint tokens are async (agent/file discovery): the async path must serve them.
+		if (this.isNamespaceToken(textBeforeCursor)) return null;
 		const slashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		if (slashStart === null) return null;
 		const commandText = textBeforeCursor.slice(slashStart);

@@ -49,6 +49,27 @@ export function findTrailingSlashCommandStart(text: string): number | null {
 	return match.index + slashOffset;
 }
 
+export interface InlineNamespaceMatch {
+	/** Index of the leading `/`. */
+	start: number;
+	prefix: string;
+	query: string;
+}
+
+/**
+ * Locate a `/namespace:` hint token ending at the cursor. Unlike
+ * {@link findTrailingSlashCommandStart} the query may contain `/` (so
+ * `/local:src/fi` keeps completing), and the token may open the draft or sit
+ * mid-prompt.
+ */
+export function findInlineNamespace(text: string, prefixes: readonly string[]): InlineNamespaceMatch | null {
+	const match = /(?:^|\s)\/([A-Za-z][\w-]*:)([^\s]*)$/.exec(text);
+	if (!match || match.index === undefined) return null;
+	const prefix = match[1] ?? "";
+	if (!prefixes.includes(prefix)) return null;
+	return { start: match.index + match[0].indexOf("/"), prefix, query: match[2] ?? "" };
+}
+
 function extractQuotedPrefix(text: string): string | null {
 	const quoteStart = findUnclosedQuoteStart(text);
 	if (quoteStart === null) {

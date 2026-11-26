@@ -5,8 +5,8 @@ import { createRoot, effect, type KeyEvent, type PasteEvent, type UiNode, untrac
 import type { InputEvent } from "@oh-my-pi/pi-tui/driver/index";
 import { emergencyTerminalRestore } from "@oh-my-pi/pi-tui/driver/session";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
-import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
-import type { AutocompleteProvider, SlashCommand } from "../../autocomplete/autocomplete";
+import { formatBytes, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import type { AutocompleteItem, AutocompleteProvider, SlashCommand } from "../../autocomplete/autocomplete";
 import { expandEmoticons } from "../../autocomplete/emoji";
 import { createModelMentionSource } from "../../autocomplete/model-mention";
 import { createPromptActionAutocompleteProvider } from "../../autocomplete/prompt-actions";
@@ -16,16 +16,29 @@ import { resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { cfgCycleOrder } from "../../config/model-settings";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { HINT_TOKEN_PREFIXES, startsWithHintNamespace } from "../../extensibility/skill-tokens";
 import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensibility/slash-commands";
-import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
+import {
+	InternalUrlRouter,
+	type LocalFileEntry,
+	listLocalFiles,
+	resolveLocalRoot,
+	sessionLocalProtocolOptions,
+} from "../../internal-urls";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
 import type { DequeuedMessage, RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { cfgHideThinkingBlock } from "../../session/settings";
-import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import {
+	executeBuiltinSlashCommand,
+	lookupBuiltinSlashCommand,
+	resolveBuiltinInvocation,
+} from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
+import { listAgentCompletions } from "../../task/agent-completions";
+import { cfgTaskDisabledAgents } from "../../task/settings";
 import { parseConfiguredThinkingLevel } from "../../thinking/levels";
 import { isTinyLocalModelKey } from "../../tiny/models";
 import { tinyTitleClient } from "../../tiny/title-client";
@@ -1670,10 +1683,8 @@ export class InputController {
 
 	/** Whether `text` dispatches to a builtin, matching executeBuiltinSlashCommand(). */
 	#matchesBuiltinSlashCommand(text: string): boolean {
-		const parsed = parseSlashCommand(text);
-		if (!parsed) return false;
-		const builtin = lookupBuiltinSlashCommand(parsed.name);
-		return builtin !== undefined && (builtin.allowArgs === true || !parsed.args);
+		const resolved = resolveBuiltinInvocation(text);
+		return resolved !== undefined && (resolved.command.allowArgs === true || !resolved.parsed.args);
 	}
 
 	/** Whether `text` invokes a registered extension command, which runs locally instead of prompting the model. */
@@ -1709,9 +1720,8 @@ export class InputController {
 			return;
 		}
 		if (text?.startsWith("/")) {
-			const parsed = parseSlashCommand(text);
-			const name = parsed && lookupBuiltinSlashCommand(parsed.name)?.name;
-			if (parsed && name && FOCUSED_VIEW_COMMANDS[name]?.(parsed.args)) {
+			const resolved = resolveBuiltinInvocation(text);
+			if (resolved && FOCUSED_VIEW_COMMANDS[resolved.command.name]?.(resolved.parsed.args)) {
 				// Viewer-scoped commands: /btw asks about the focused transcript, /copy picks
 				// from it, /export writes it (with its own subagents), /jobs lists the focused
 				// agent's jobs without a way to cancel them, /usage reports account-wide limits,
@@ -3075,6 +3085,8 @@ export class InputController {
 	 */
 	#recordSlashCommandUsage(text: string): void {
 		if (!text.startsWith("/")) return;
+		// Hint tokens are prose, not command usage: `/model:x` must not rank `/model`.
+		if (startsWithHintNamespace(text)) return;
 		const token = text.slice(1).split(/\s+/, 1)[0] ?? "";
 		if (!token) return;
 		if (this.#isKnownNonBuiltinSlashCommandToken(token)) {
@@ -3088,16 +3100,63 @@ export class InputController {
 
 	createAutocompleteProvider(commands: SlashCommand[], basePath: string): AutocompleteProvider {
 		void commandUsage.load();
+		const modelMentions = createModelMentionSource({
+			source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
+			registry: this.ctx.session.modelRegistry,
+			scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
+		});
+		let localFiles: { items: readonly LocalFileEntry[]; at: number } | undefined;
+		const listLocalFileEntries = async (): Promise<readonly LocalFileEntry[]> => {
+			if (localFiles && Date.now() - localFiles.at < 2_000) return localFiles.items;
+			const items = await listLocalFiles(sessionLocalProtocolOptions(this.ctx.sessionManager));
+			localFiles = { items, at: Date.now() };
+			return items;
+		};
+		// Keyed by the gate's own prefixes, so the composer cannot offer a hint the
+		// parser refuses (or miss one it accepts).
+		const namespaceCompletions: Record<
+			(typeof HINT_TOKEN_PREFIXES)[number],
+			(query: string) => readonly AutocompleteItem[] | Promise<readonly AutocompleteItem[]>
+		> = {
+			"/agent:": async query => {
+				const agents = await listAgentCompletions({
+					cwd: this.ctx.sessionManager.getCwd(),
+					extensionRoots: this.ctx.session.effectiveExtensionRoots,
+					disabledAgents: cfgTaskDisabledAgents.get(this.ctx.settings),
+					sessionAgents: this.ctx.session.getSessionAgents(),
+				});
+				const lower = query.toLowerCase();
+				return agents
+					.filter(agent => agent.name.toLowerCase().includes(lower))
+					.map(agent => ({ value: `agent:${agent.name}`, label: agent.name, description: agent.description }));
+			},
+			"/model:": query =>
+				Array.from(modelMentions(query))
+					.slice(0, 20)
+					.map(item => ({ value: `model:${item.selector}`, label: item.selector, description: item.model.name })),
+			"/local:": async query => {
+				const entries = await listLocalFileEntries();
+				const lower = query.toLowerCase();
+				return entries
+					.filter(entry => entry.name.toLowerCase().includes(lower))
+					.slice(0, 20)
+					.map(entry => ({
+						value: `local:${entry.name}`,
+						label: entry.name,
+						description: formatBytes(entry.size),
+					}));
+			},
+		};
 		return createPromptActionAutocompleteProvider({
 			commands,
 			basePath,
 			commandUsage: name => commandUsage.get(name),
 			emojiAutocomplete: () => cfgEmojiAutocomplete.get(this.ctx.settings),
-			modelMentions: createModelMentionSource({
-				source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
-				registry: this.ctx.session.modelRegistry,
-				scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
-			}),
+			modelMentions,
+			namespaces: HINT_TOKEN_PREFIXES.map(prefix => ({
+				prefix: prefix.slice(1),
+				getCompletions: namespaceCompletions[prefix],
+			})),
 			// The interactive host uses the default registry; the receiving session can change with focus.
 			internalUrlCaller: () => {
 				const manager = this.ctx.viewSession.sessionManager;
