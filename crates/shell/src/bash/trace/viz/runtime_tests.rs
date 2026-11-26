@@ -1154,7 +1154,16 @@ async fn running_command_keeps_the_script_it_runs_active() {
 		let probe = async {
 			loop {
 				let p = present(&trace, &Options::default());
-				if p["running"] == true {
+				// `running` flips as soon as the command starts; the untraced
+				// script's rows are laid out a moment later. Sampling on
+				// `running` alone reads a frame with the script missing, which
+				// is a race, not the state under test (upstream flaked ~1 run in
+				// 5 on the `github` runner, and 2 in 5 with the fork's tree).
+				let script_rows = rows(&p)
+					.iter()
+					.filter(|(_, row)| row["depth"].as_u64() > Some(0))
+					.count();
+				if p["running"] == true && script_rows >= 3 {
 					let raw = present(&trace, &Options { view: View::Raw, ..Options::default() });
 					std::fs::write(&gate, []).unwrap();
 					return (p, raw);
