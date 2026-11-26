@@ -1,6 +1,6 @@
 # Oh My Pi Fork Patches
 
-Rebased onto `upstream/main` (`a28d947a72`, 2026-11-25, version 19.2.1). `fork-sync`
+Rebased onto `upstream/main` (`e951857c66`, 2026-11-26, version 19.2.1). `fork-sync`
 moves the base forward daily and rewrites every commit hash below, so read the
 hashes and line hints here as "as of the last hand rebase" — the current tip is
 whatever `git log -1 origin/john` and the last green run say. This documents every change we maintain, why it exists, and where to find it.
