@@ -4,21 +4,26 @@ import * as os from "node:os";
 import * as path from "node:path";
 import { buildSkillPromptMessage, type Skill } from "@oh-my-pi/pi-coding-agent/extensibility/skills";
 import { removeWithRetries, Snowflake } from "@oh-my-pi/pi-utils";
+import { buildUserSkillPromptsForTest } from "./helpers/skill-prompts";
 
-async function createSkill(body: string): Promise<{ dir: string; skill: Skill }> {
+async function createNamedSkill(name: string, body: string): Promise<{ dir: string; skill: Skill }> {
 	const dir = await fs.mkdtemp(path.join(os.tmpdir(), `omp-skill-prompt-${Snowflake.next()}-`));
 	const filePath = path.join(dir, "SKILL.md");
-	await Bun.write(filePath, `---\nname: reviewer\ndescription: Review code\n---\n\n${body}\n`);
+	await Bun.write(filePath, `---\nname: ${name}\ndescription: ${name} skill\n---\n\n${body}\n`);
 	return {
 		dir,
 		skill: {
-			name: "reviewer",
-			description: "Review code",
+			name,
+			description: `${name} skill`,
 			filePath,
 			baseDir: dir,
 			source: "test",
 		},
 	};
+}
+
+function createSkill(body: string): Promise<{ dir: string; skill: Skill }> {
+	return createNamedSkill("reviewer", body);
 }
 
 async function createSkillFromRaw(raw: string): Promise<{ dir: string; skill: Skill }> {
@@ -39,8 +44,8 @@ describe("buildSkillPromptMessage", () => {
 			expect(built.message).toContain("Review the supplied code carefully.");
 			expect(built.message).toContain(`[Skill directory: ${dir}]`);
 			expect(built.message).toContain("focus on risks");
-			// The raw draft is display-only: it never reaches the wire text.
-			expect(built.message).not.toContain("/skill:reviewer");
+			// The draft reaches the model as typed, so the hint and skill tokens survive.
+			expect(built.message).toContain("User: /skill:reviewer focus on risks");
 			expect(built.details).toMatchObject({
 				name: "reviewer",
 				path: skill.filePath,
@@ -50,6 +55,48 @@ describe("buildSkillPromptMessage", () => {
 			});
 		} finally {
 			await removeWithRetries(dir);
+		}
+	});
+
+	test("attaches every named skill body behind one user line for a multi-skill draft", async () => {
+		const alpha = await createNamedSkill("alpha", "Alpha instructions.");
+		const beta = await createNamedSkill("beta", "Beta instructions.");
+		try {
+			const built = await buildUserSkillPromptsForTest([alpha.skill, beta.skill], {
+				args: "fix auth and",
+				prompt: "fix auth /skill:alpha and /skill:beta",
+			});
+
+			expect(built.message).toContain("User invoked 2 skills");
+			expect(built.message).toContain("Alpha instructions.");
+			expect(built.message).toContain("Beta instructions.");
+			expect(built.message).toContain(`[Skill directory: ${alpha.dir}]`);
+			expect(built.message).toContain(`[Skill directory: ${beta.dir}]`);
+			expect(built.message.match(/^User: /gm)).toHaveLength(1);
+			expect(built.message).toContain("User: fix auth /skill:alpha and /skill:beta");
+			expect(built.details).toMatchObject({ name: "alpha", path: alpha.skill.filePath, args: "fix auth and" });
+			expect(built.details.skills?.map(entry => entry.name)).toEqual(["alpha", "beta"]);
+		} finally {
+			await removeWithRetries(alpha.dir);
+			await removeWithRetries(beta.dir);
+		}
+	});
+
+	test("omits the user line when the draft is only tokens", async () => {
+		const alpha = await createNamedSkill("alpha", "Alpha instructions.");
+		const beta = await createNamedSkill("beta", "Beta instructions.");
+		try {
+			const built = await buildUserSkillPromptsForTest([alpha.skill, beta.skill], {
+				args: "",
+				prompt: "/skill:alpha /skill:beta",
+			});
+
+			expect(built.message).toContain("Alpha instructions.");
+			expect(built.message).toContain("Beta instructions.");
+			expect(built.message).not.toContain("User:");
+		} finally {
+			await removeWithRetries(alpha.dir);
+			await removeWithRetries(beta.dir);
 		}
 	});
 

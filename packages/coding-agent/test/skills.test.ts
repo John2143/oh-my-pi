@@ -1022,12 +1022,18 @@ describe("collision handling", () => {
 describe("parseSkillInvocation", () => {
 	describe("leading `/skill:<name>` form", () => {
 		it("parses a bare leading command", () => {
-			expect(parseSkillInvocation("/skill:foo")).toEqual({ name: "foo", args: "", prompt: "/skill:foo" });
+			expect(parseSkillInvocation("/skill:foo")).toEqual({
+				name: "foo",
+				names: ["foo"],
+				args: "",
+				prompt: "/skill:foo",
+			});
 		});
 
 		it("captures everything after the first space as args", () => {
 			expect(parseSkillInvocation("/skill:foo focus on auth")).toEqual({
 				name: "foo",
+				names: ["foo"],
 				args: "focus on auth",
 				prompt: "/skill:foo focus on auth",
 			});
@@ -1036,6 +1042,7 @@ describe("parseSkillInvocation", () => {
 		it("terminates the name at a newline so a multi-line draft still invokes the skill", () => {
 			expect(parseSkillInvocation("/skill:foo\nfocus on auth")).toEqual({
 				name: "foo",
+				names: ["foo"],
 				args: "focus on auth",
 				prompt: "/skill:foo\nfocus on auth",
 			});
@@ -1044,6 +1051,7 @@ describe("parseSkillInvocation", () => {
 		it("allows leading whitespace before the `/skill:<name>` command", () => {
 			expect(parseSkillInvocation("  /skill:foo focus on auth")).toEqual({
 				name: "foo",
+				names: ["foo"],
 				args: "focus on auth",
 				prompt: "/skill:foo focus on auth",
 			});
@@ -1058,6 +1066,7 @@ describe("parseSkillInvocation", () => {
 		it("threads surrounding prose through as args when the skill token appears after typed text", () => {
 			expect(parseSkillInvocation("fix the auth bug /skill:security-scan ")).toEqual({
 				name: "security-scan",
+				names: ["security-scan"],
 				args: "fix the auth bug",
 				prompt: "fix the auth bug /skill:security-scan",
 			});
@@ -1066,6 +1075,7 @@ describe("parseSkillInvocation", () => {
 		it("collapses prose on both sides of the skill token into a single args string", () => {
 			expect(parseSkillInvocation("leading /skill:foo trailing")).toEqual({
 				name: "foo",
+				names: ["foo"],
 				args: "leading trailing",
 				prompt: "leading /skill:foo trailing",
 			});
@@ -1074,6 +1084,7 @@ describe("parseSkillInvocation", () => {
 		it("preserves embedded newlines in args when the skill token spans a line break", () => {
 			expect(parseSkillInvocation("explain this\nthen use /skill:security-scan ")).toEqual({
 				name: "security-scan",
+				names: ["security-scan"],
 				args: "explain this\nthen use",
 				prompt: "explain this\nthen use /skill:security-scan",
 			});
@@ -1101,12 +1112,14 @@ describe("parseSkillInvocation", () => {
 			// returns 0 for them — so the mid-prompt parser must still see the embedded skill.
 			expect(parseSkillInvocation("$echo /skill:reviewer")).toEqual({
 				name: "reviewer",
+				names: ["reviewer"],
 				args: "$echo",
 				prompt: "$echo /skill:reviewer",
 			});
 			// oxlint-disable-next-line no-template-curly-in-string -- testing literal string containing shell variable
 			expect(parseSkillInvocation("${HOME}/bin /skill:foo")).toEqual({
 				name: "foo",
+				names: ["foo"],
 				// oxlint-disable-next-line no-template-curly-in-string -- testing literal string containing shell variable
 				args: "${HOME}/bin",
 				// oxlint-disable-next-line no-template-curly-in-string -- testing literal string containing shell variable
@@ -1127,6 +1140,7 @@ describe("parseSkillInvocation", () => {
 			// and mid-prompt completion inserts it, so the token must invoke it.
 			expect(parseSkillInvocation("fix the bug /skill:superpowers/tdd focus on auth")).toEqual({
 				name: "superpowers/tdd",
+				names: ["superpowers/tdd"],
 				args: "fix the bug focus on auth",
 				prompt: "fix the bug /skill:superpowers/tdd focus on auth",
 			});
@@ -1156,6 +1170,74 @@ describe("parseSkillInvocation", () => {
 			// Only one `/` is a namespaced name; deeper tokens read as paths.
 			expect(parseSkillInvocation("see /skill:foo/bar/baz")).toBeUndefined();
 			expect(parseSkillInvocation("see /skill:foo/")).toBeUndefined();
+		});
+	});
+
+	describe("several `/skill:<name>` tokens in one draft", () => {
+		it("lists every token in draft order and strips them all from args", () => {
+			expect(parseSkillInvocation("fix auth /skill:alpha and /skill:beta")).toEqual({
+				name: "alpha",
+				names: ["alpha", "beta"],
+				args: "fix auth and",
+				prompt: "fix auth /skill:alpha and /skill:beta",
+			});
+		});
+
+		it("parses a leading token alongside a later one", () => {
+			expect(parseSkillInvocation("/skill:alpha do x /skill:beta")).toEqual({
+				name: "alpha",
+				names: ["alpha", "beta"],
+				args: "do x",
+				prompt: "/skill:alpha do x /skill:beta",
+			});
+		});
+
+		it("keeps a repeated name in names (the dispatcher attaches its body once)", () => {
+			expect(parseSkillInvocation("/skill:alpha do x /skill:alpha")).toEqual({
+				name: "alpha",
+				names: ["alpha", "alpha"],
+				args: "do x",
+				prompt: "/skill:alpha do x /skill:alpha",
+			});
+		});
+
+		it("collects five tokens in order", () => {
+			const parsed = parseSkillInvocation("/skill:a /skill:b /skill:c /skill:d /skill:e");
+			expect(parsed?.names).toEqual(["a", "b", "c", "d", "e"]);
+			expect(parsed?.args).toBe("");
+		});
+
+		it("keeps a collision-namespaced second token intact", () => {
+			expect(parseSkillInvocation("plan /skill:alpha then /skill:superpowers/tdd")).toEqual({
+				name: "alpha",
+				names: ["alpha", "superpowers/tdd"],
+				args: "plan then",
+				prompt: "plan /skill:alpha then /skill:superpowers/tdd",
+			});
+		});
+
+		it("preserves the newlines between line-separated tokens in args", () => {
+			expect(parseSkillInvocation("/skill:alpha\nprose\n/skill:beta")).toEqual({
+				name: "alpha",
+				names: ["alpha", "beta"],
+				args: "prose",
+				prompt: "/skill:alpha\nprose\n/skill:beta",
+			});
+		});
+
+		it("attaches skill tokens in a draft that opens with a hint token", () => {
+			expect(parseSkillInvocation("/agent:scout review /skill:reviewer")).toEqual({
+				name: "reviewer",
+				names: ["reviewer"],
+				args: "/agent:scout review",
+				prompt: "/agent:scout review /skill:reviewer",
+			});
+		});
+
+		it("leaves a token glued to punctuation as literal text, as before", () => {
+			// The name still swallows the comma, so dispatch treats it as an unknown skill.
+			expect(parseSkillInvocation("/skill:alpha,")?.names).toEqual(["alpha,"]);
+			expect(parseSkillInvocation("do x /skill:alpha,")?.names).toEqual(["alpha,"]);
 		});
 	});
 });

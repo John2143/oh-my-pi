@@ -110,7 +110,13 @@ export function presentedFacts(block: TranscriptBlock): PresentedFacts | undefin
 			return { name: "advisor", title: "Advisor", role: "omp.advisor", target, summary: titled("Advisor", target) };
 		}
 		case "skill-prompt": {
-			const target = oneLine(typeof details.name === "string" ? details.name : "");
+			const skills = Array.isArray(details.skills)
+				? (details.skills as { name?: unknown }[]).flatMap(entry =>
+						typeof entry?.name === "string" ? [oneLine(entry.name)] : [],
+					)
+				: [];
+			const target =
+				skills.length > 0 ? skills.join(" + ") : oneLine(typeof details.name === "string" ? details.name : "");
 			return { name: "skill", title: "Skill", role: "omp.skill", target, summary: titled("Skill", target) };
 		}
 		case "lsp-late-diagnostic":

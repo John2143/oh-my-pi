@@ -30,6 +30,7 @@ export {
 	type NormalizedCustomMessagePayload,
 	type BackgroundTanDispatchDetails,
 	type SkillPromptDetails,
+	type SkillPromptEntry,
 	SILENT_ABORT_MARKER,
 	isSilentAbort,
 	USER_INTERRUPT_LABEL,
