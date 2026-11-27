@@ -16,7 +16,7 @@ import type { JSXNode, Reactive } from "@oh-my-pi/pi-tui";
 import type { TspSpan } from "@oh-my-pi/pi-wire";
 import type { SkillPromptDetails } from "../../../session/transcript/messages";
 import { cardExpansion } from "../expansion";
-import { chipText, skillChipLabel, termChips } from "./chips";
+import { chipMarks, chipText, skillChipLabel, termChips } from "./chips";
 import { openableImage } from "./image";
 
 /** What a skill row shows. */
@@ -25,6 +25,12 @@ export interface SkillMessageProps {
 	readonly details?: Partial<SkillPromptDetails>;
 	/** Files of attached images by chip number − 1. */
 	readonly imageLinks?: readonly (string | undefined)[];
+	/** Agent `.md` path of an `/agent:` chip, by agent name. */
+	readonly agentPath?: (name: string) => string | undefined;
+	/** On-disk path of a `/local:` chip, by relative session path. */
+	readonly localPath?: (relativePath: string) => string | undefined;
+	/** Display name of a `/model:` chip, by model selector. */
+	readonly modelLabel?: (selector: string) => string | undefined;
 	readonly expanded: Reactive<boolean>;
 	readonly onToggle?: (expanded: boolean) => void;
 }
@@ -112,7 +118,11 @@ export function SkillMessage(props: SkillMessageProps): JSXNode {
 	const chips = chipText(draft, {
 		imageLinks: props.imageLinks,
 		skillPath: candidate => entries.find(entry => entry.name === candidate)?.path,
+		agentPath: props.agentPath,
+		localPath: props.localPath,
+		modelLabel: props.modelLabel,
 	});
+	const marks = chips.chips.length > 0 ? chipMarks(chips.chips) : undefined;
 	const { expanded, toggle } = cardExpansion(props.expanded, props.onToggle);
 	return (
 		<card
@@ -131,7 +141,7 @@ export function SkillMessage(props: SkillMessageProps): JSXNode {
 				expanded: expanded(),
 			})}
 		>
-			{draft && <md text={draft} />}
+			{chips.text && <md text={chips.text} {...(marks ? { marks } : {})} />}
 			<section
 				key="prompt"
 				head={[{ t: "prompt", s: "muted" }]}

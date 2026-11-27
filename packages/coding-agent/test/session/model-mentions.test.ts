@@ -16,6 +16,8 @@ import {
 } from "@oh-my-pi/pi-coding-agent/modes/rpc/rpc-prompt-results";
 import { AgentSession } from "@oh-my-pi/pi-coding-agent/session/agent-session";
 import { AuthStorage } from "@oh-my-pi/pi-coding-agent/session/auth-storage";
+import { expandAgentAndLocalHints, referencedAgentHints } from "@oh-my-pi/pi-coding-agent/extensibility/skill-tokens";
+import { HINT_TOKENS_NOTICE_TYPE, isHiddenUserCompanion } from "@oh-my-pi/pi-coding-agent/session/queued-messages";
 import { SKILL_PROMPT_MESSAGE_TYPE } from "@oh-my-pi/pi-coding-agent/session/messages";
 import type { CustomMessage } from "@oh-my-pi/pi-coding-agent/session/messages";
 import { expandModelMentionTags } from "@oh-my-pi/pi-coding-agent/session/model-mention-syntax";
@@ -453,6 +455,265 @@ describe("model mentions", () => {
 
 			// The RPC client that submitted `raw` only ever holds that raw text;
 			// removal must still find the mention-expanded queued chip.
+			expect(agentSession.removeQueuedMessage(raw, "steering")).toBe(true);
+			expect(agentSession.getQueuedMessages().steering).toEqual([]);
+		} finally {
+			agentSession.agent.state.isStreaming = false;
+			await agentSession.dispose();
+		}
+	});
+
+	test("/model: hint tokens share pseudonyms with ^ mentions, skip code/commands, and preserve punctuation", () => {
+		expect(mentions.expandMentions("use /model:a/x? and ^a/x and `/model:b/y`")).toBe(
+			'use <model agent="m1" name="X One"/>? and <model agent="m1" name="X One"/> and `/model:b/y`',
+		);
+		expect(mentions.expandMentions("/compact /model:b/y")).toBe("/compact /model:b/y");
+		expect(mentions.expandMentions("!echo /model:b/y")).toBe("!echo /model:b/y");
+		expect(mentions.expandMentions("```\n/model:b/y\n```")).toBe("```\n/model:b/y\n```");
+		expect(readModelMentions(session.getBranch())).toEqual([{ agent: "m1", selector: "a/x", name: "X One" }]);
+	});
+
+	test("specialist pairing clones the specialist definition, replays cleanly, and never escalates when disabled", () => {
+		const scout = getBundledAgent("scout");
+		const reviewer = getBundledAgent("reviewer");
+		if (!scout || !reviewer) throw new Error("Missing bundled scout/reviewer agents");
+
+		let scoutEnabled = true;
+		const specialistRegistry = new ModelMentionRegistry({
+			sessionManager: session,
+			modelRegistry: registry,
+			scopedModels: () => scoped,
+			resolveAgent: name => {
+				if (name === "scout") return scoutEnabled ? scout : undefined;
+				if (name === "reviewer") return reviewer;
+				return getBundledAgent(name);
+			},
+		});
+
+		// Adjacent pairing and non-adjacent single-agent pairing share the same scout clone pseudonym.
+		expect(specialistRegistry.expandMentions("search with /agent:scout /model:a/x")).toBe(
+			'search with /agent:scout <model agent="m1" name="X One"/>',
+		);
+		expect(specialistRegistry.expandMentions("use /agent:scout to inspect src/ with /model:a/x")).toBe(
+			'use /agent:scout to inspect src/ with <model agent="m1" name="X One"/>',
+		);
+		// Plain /model:a/x (or /agent:task /model:a/x) gets its own task-backed pseudonym without colliding with scout.
+		expect(specialistRegistry.expandMentions("run /agent:task /model:a/x and /model:a/x")).toBe(
+			'run /agent:task <model agent="m2" name="X One"/> and <model agent="m2" name="X One"/>',
+		);
+		// Multi-pair prompt binds each adjacent model to its specialist.
+		expect(specialistRegistry.expandMentions("run /agent:scout /model:b/y and /agent:reviewer /model:b/y")).toBe(
+			'run /agent:scout <model agent="m3" name="Y"/> and /agent:reviewer <model agent="m4" name="Y"/>',
+		);
+
+		expect(readModelMentions(session.getBranch())).toEqual([
+			{ agent: "m1", baseAgent: "scout", selector: "a/x", name: "X One" },
+			{ agent: "m2", selector: "a/x", name: "X One" },
+			{ agent: "m3", baseAgent: "scout", selector: "b/y", name: "Y" },
+			{ agent: "m4", baseAgent: "reviewer", selector: "b/y", name: "Y" },
+		]);
+
+		// Replay restores baseAgent and clones specialist tools/systemPrompt.
+		specialistRegistry.syncFromBranch();
+		const liveAgents = specialistRegistry.sessionAgents();
+		const m1 = liveAgents.find(a => a.name === "m1");
+		const m2 = liveAgents.find(a => a.name === "m2");
+		const m4 = liveAgents.find(a => a.name === "m4");
+		expect(m1?.systemPrompt).toBe(scout.systemPrompt);
+		expect(m1?.tools).toEqual(scout.tools);
+		expect(m1?.description).toContain("scout pinned to X One (a/x)");
+		expect(m2?.systemPrompt).toBe(getBundledAgent("task")?.systemPrompt);
+		expect(m4?.systemPrompt).toBe(reviewer.systemPrompt);
+
+		// Safety invariant: disabling scout omits m1/m3 rather than escalating them into read-write task.
+		scoutEnabled = false;
+		expect(specialistRegistry.sessionAgents().map(a => a.name)).toEqual(["m2", "m4"]);
+	});
+
+	test("expandAgentAndLocalHints and referencedAgentHints rewrite prose hints and skip code/invalid targets", () => {
+		const expanded = expandAgentAndLocalHints(
+			"use /agent:scout, /agent:ghost, `/agent:scout`, /local:plans/x.md., /local:../secret",
+			{
+				isKnownAgent: name => name === "scout",
+				formatLocalUrl: rel => (rel.includes("..") ? undefined : `local://${rel}`),
+			},
+		);
+		expect(expanded).toBe(
+			'use <agent name="scout"/>, /agent:ghost, `/agent:scout`, local://plans/x.md., /local:../secret',
+		);
+		expect(
+			referencedAgentHints('run <agent name="scout"/> and `<agent name="task"/>` and <agent name="scout"/>'),
+		).toEqual(["scout"]);
+	});
+
+	test("AgentSession expands /model:, /agent:, /local: and emits hint-tokens-notice with direct task call guidance", async () => {
+		vi.spyOn(registry, "getApiKey").mockResolvedValue("test-key");
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: models[0], systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: createMockModel({
+				responses: [{ content: ["Task done"] }, { content: ["Scout done"] }, { content: ["Solo scout done"] }],
+			}).stream,
+		});
+		const agentSession = new AgentSession({
+			agent,
+			sessionManager: session,
+			modelRegistry: registry,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+		});
+		try {
+			// Turn 1: /model: + /agent:task + /local:
+			await agentSession.prompt(
+				"Can you test using a small task with /model:b/y /agent:task on /local:plans/x.md ?",
+			);
+			const userTexts = () =>
+				agent.state.messages
+					.filter(message => message.role === "user")
+					.map(message =>
+						typeof message.content === "string"
+							? message.content
+							: message.content
+									.filter(part => part.type === "text")
+									.map(part => part.text)
+									.join(""),
+					);
+			const hintNotices = () =>
+				agent.state.messages.filter(
+					(message): message is CustomMessage =>
+						message.role === "custom" && message.customType === HINT_TOKENS_NOTICE_TYPE,
+				);
+
+			expect(userTexts()[0]).toBe(
+				'Can you test using a small task with <model agent="m1" name="Y"/> <agent name="task"/> on local://plans/x.md ?',
+			);
+			expect(hintNotices()).toHaveLength(1);
+			expect(isHiddenUserCompanion(hintNotices()[0]!)).toBe(true);
+			expect(hintNotices()[0]!.display).toBe(false);
+			expect(hintNotices()[0]!.content).toContain("`task`");
+			expect(hintNotices()[0]!.content).toContain('agent: "m1"');
+			expect(hintNotices()[0]!.content).toContain("runs `task` on `b/y`");
+
+			// Turn 2: specialist /agent:scout + /model:b/y clones scout as m2 and instructs agent: "m2"
+			await agentSession.prompt("Search src/ with /agent:scout /model:b/y");
+			expect(userTexts()[1]).toBe('Search src/ with <agent name="scout"/> <model agent="m2" name="Y"/>');
+			const m2 = agentSession.getSessionAgents().find(candidate => candidate.name === "m2");
+			expect(m2?.systemPrompt).toBe(getBundledAgent("scout")?.systemPrompt);
+			expect(m2?.model).toEqual(["b/y"]);
+			expect(hintNotices()).toHaveLength(2);
+			expect(hintNotices()[1]!.content).toContain("`scout` (read-only, no edits)");
+			expect(hintNotices()[1]!.content).toContain('agent: "m2"');
+			expect(hintNotices()[1]!.content).toContain("runs `scout` on `b/y`");
+
+			// Turn 3: standalone /agent:scout (no model) restates scout description and instructs agent: "scout"
+			await agentSession.prompt("Check files with /agent:scout");
+			expect(userTexts()[2]).toBe('Check files with <agent name="scout"/>');
+			expect(hintNotices()).toHaveLength(3);
+			expect(hintNotices()[2]!.content).toContain("`scout` (read-only, no edits)");
+			expect(hintNotices()[2]!.content).toContain('agent: "scout"');
+		} finally {
+			await agentSession.dispose();
+		}
+	});
+
+	test("skill prompts isolate SKILL.md body from hint-tokens-notice and strip __expandedUserArgs on persistence", async () => {
+		vi.spyOn(registry, "getApiKey").mockResolvedValue("test-key");
+		const dir = await fs.mkdtemp(path.join(os.tmpdir(), "omp-hint-skill-"));
+		const filePath = path.join(dir, "SKILL.md");
+		await Bun.write(filePath, 'Doc example: <agent name="scout"/> and /agent:reviewer');
+		const docSkill = { name: "doc", filePath, baseDir: dir };
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: models[0], systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: createMockModel({ responses: [{ content: ["First done"] }, { content: ["Second done"] }] }).stream,
+		});
+		const agentSession = new AgentSession({
+			agent,
+			sessionManager: session,
+			modelRegistry: registry,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+		});
+		try {
+			// User args have no agent hints — the <agent name="scout"/> inside SKILL.md MUST NOT trigger a hint notice.
+			const plainBuilt = await agentSession.buildUserSkillPrompts([docSkill], { args: "just summarize" });
+			await agentSession.promptCustomMessage({
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: plainBuilt.message,
+				display: true,
+				details: plainBuilt.details,
+				attribution: "user",
+			});
+			expect(
+				agent.state.messages.some(
+					message => message.role === "custom" && message.customType === HINT_TOKENS_NOTICE_TYPE,
+				),
+			).toBe(false);
+
+			// User args WITH /agent:scout /model:b/y trigger hint-tokens-notice and strip __expandedUserArgs from branch.
+			const pairedBuilt = await agentSession.buildUserSkillPrompts([docSkill], {
+				args: "inspect with /agent:scout /model:b/y",
+			});
+			await agentSession.promptCustomMessage({
+				customType: SKILL_PROMPT_MESSAGE_TYPE,
+				content: pairedBuilt.message,
+				display: true,
+				details: pairedBuilt.details,
+				attribution: "user",
+			});
+			const notice = agent.state.messages.find(
+				(message): message is CustomMessage =>
+					message.role === "custom" && message.customType === HINT_TOKENS_NOTICE_TYPE,
+			);
+			expect(notice?.content).toContain("`scout` (read-only, no edits)");
+			expect(notice?.content).toContain('agent: "m1"');
+
+			const persistedSkillEntries = session
+				.getBranch()
+				.filter(
+					(entry): entry is Extract<typeof entry, { type: "custom_message" }> =>
+						entry.type === "custom_message" && entry.customType === SKILL_PROMPT_MESSAGE_TYPE,
+				);
+			expect(persistedSkillEntries).toHaveLength(2);
+			for (const entry of persistedSkillEntries) {
+				expect(entry.details).not.toHaveProperty("__expandedUserArgs");
+			}
+		} finally {
+			await agentSession.dispose();
+			await removeWithRetries(dir);
+		}
+	});
+
+	test("queued /model: + /agent: prompts carry hint-tokens-notice and match removeQueuedMessage by raw text", async () => {
+		const agent = new Agent({
+			getApiKey: () => "test-key",
+			initialState: { model: models[0], systemPrompt: ["Test"], tools: [], messages: [] },
+			streamFn: createMockModel({ responses: [] }).stream,
+		});
+		const agentSession = new AgentSession({
+			agent,
+			sessionManager: session,
+			modelRegistry: registry,
+			settings: Settings.isolated({ "compaction.enabled": false }),
+		});
+		try {
+			agentSession.agent.state.isStreaming = true;
+			const raw = "compare /agent:scout on /model:a/x and /model:b/y";
+			const queued = await agentSession.prompt(raw, { streamingBehavior: "steer" });
+			expect(queued).toBe(true);
+			expect(agentSession.getQueuedMessages().steering).toEqual([
+				'compare <agent name="scout"/> on <model agent="m1" name="X One"/> and <model agent="m2" name="Y"/>',
+			]);
+			const notice = agent
+				.peekSteeringQueue()
+				.find(
+					(message): message is CustomMessage =>
+						message.role === "custom" && message.customType === HINT_TOKENS_NOTICE_TYPE,
+				);
+			expect(notice?.content).toContain("`scout` (read-only, no edits)");
+			expect(notice?.content).toContain('agent: "m1"');
+			expect(notice?.content).toContain('agent: "m2"');
+			expect(notice?.content).toContain("runs `scout` on `a/x`");
+			expect(notice?.content).toContain("runs `scout` on `b/y`");
+
 			expect(agentSession.removeQueuedMessage(raw, "steering")).toBe(true);
 			expect(agentSession.getQueuedMessages().steering).toEqual([]);
 		} finally {

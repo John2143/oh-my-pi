@@ -2,7 +2,11 @@ import { afterEach, describe, expect, test } from "bun:test";
 import * as fs from "node:fs/promises";
 import * as os from "node:os";
 import * as path from "node:path";
-import { listAgentCompletions, resetAgentCompletionCache } from "@oh-my-pi/pi-coding-agent/task/agent-completions";
+import {
+	getCachedAgentCompletions,
+	listAgentCompletions,
+	resetAgentCompletionCache,
+} from "@oh-my-pi/pi-coding-agent/task/agent-completions";
 import type { AgentDefinition } from "@oh-my-pi/pi-coding-agent/task/types";
 import { removeWithRetries } from "@oh-my-pi/pi-utils";
 
@@ -85,5 +89,26 @@ describe("listAgentCompletions", () => {
 		const items = await listAgentCompletions({ cwd, disabledAgents: [], sessionAgents: [] });
 
 		expect(names(items)).toEqual([...names(items)].sort((a, b) => a.localeCompare(b)));
+	});
+
+	test("exposes real filePath for disk agents and omits embedded paths on bundled agents", async () => {
+		const cwd = await createProject([{ name: "disk-agent", description: "From the project" }]);
+
+		const cold = getCachedAgentCompletions({ cwd, disabledAgents: [], sessionAgents: [] });
+		expect(cold.stale).toBe(true);
+		const bundledScout = cold.items.find(item => item.name === "scout");
+		expect(bundledScout).toBeDefined();
+		expect(bundledScout?.filePath).toBeUndefined();
+
+		const warmed = await listAgentCompletions({ cwd, disabledAgents: [], sessionAgents: [] });
+		expect(warmed.find(item => item.name === "disk-agent")?.filePath).toBe(
+			path.join(cwd, ".omp", "agents", "disk-agent.md"),
+		);
+
+		const hot = getCachedAgentCompletions({ cwd, disabledAgents: [], sessionAgents: [] });
+		expect(hot.stale).toBe(false);
+		expect(hot.items.find(item => item.name === "disk-agent")?.filePath).toBe(
+			path.join(cwd, ".omp", "agents", "disk-agent.md"),
+		);
 	});
 });

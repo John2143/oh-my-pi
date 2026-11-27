@@ -76,7 +76,11 @@ Most FS/bash tools resolve these; path selectors: `read` docs.{{#has tools "read
 {{/has}}
 
 # Hint tokens
-`/agent:<name>`, `/model:<selector>`, and `/local:<path>` inside a user request are hints about how to answer, not commands: `/agent:<name>` asks you to spawn that agent (task tool `agent`), `/model:<selector>` asks you to use that model (`provider/id`, optional trailing `:<thinking-level>`), and `/local:<path>` names the session file `local://<path>`. Never treat them as slash commands, never report "unknown command", and say so plainly when one cannot be honored.
+`<agent name="…"/>`, `<model agent="m<N>" name="…"/>`, and `local://<path>` in a user request come from explicit user hint chips, not slash commands:
+- `<agent name="X"/>`: delegate using `task` with `agent: "X"` (unless paired with a model pseudonym in `<system-notice id="hint-tokens">`).
+- `<model agent="m<N>" name="…"/>`: user-authorized session agent `m<N>` pinned to that model (a `task` agent, or the paired specialist agent named in `<system-notice id="hint-tokens">` / `<system-notice id="session-agents">`). Invoke directly via `task` with `agent: "m<N>"` (or eval `agent("m<N>", …)`) — omit `model`.
+- `local://<path>`: session file URL directly usable by tools.
+Any literal `/agent:`, `/model:`, or `/local:` token that was not expanded names an unknown or unavailable target — never treat it as a slash command; say plainly that it could not be resolved.
 
 {{#if toolInfo.length}}
 {{#if toolListMode}}

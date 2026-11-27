@@ -179,8 +179,17 @@ export interface SlashCommand {
 export interface InlineNamespace {
 	/** Prefix including its trailing colon, e.g. `agent:`. */
 	prefix: string;
+	/** Whether bare `/query` (leading and mid-prompt) breaks out candidates from this namespace. */
+	barePrefix?: boolean;
+	/** Maximum bare-prefix items surfaced from this namespace for one query (default: 8). */
+	maxBareMatches?: number;
 	/** Candidates for the text after the prefix; each item's `value` includes `prefix`. */
 	getCompletions(query: string): Awaitable<readonly AutocompleteItem[]>;
+	/**
+	 * Synchronous cached candidates for bare-prefix `/query` lookup (used by
+	 * `trySyncSlashCompletion` and mid-prompt slash completion without blocking).
+	 */
+	getSyncCompletions?(query: string): readonly AutocompleteItem[] | null;
 }
 
 export interface AutocompleteProvider {
@@ -333,8 +342,9 @@ function buildSlashCommandCompletions(
 	// For submitted commands, collect the *possible* matches for a longer
 	// prefix, in registry order (not the current ranked/display order).
 	nextCandidates?: CommandEntry[],
+	namespaces?: readonly InlineNamespace[],
 ): AutocompleteItem[] {
-	const ranked: { item: AutocompleteItem; score: number; usage: number }[] = [];
+	const ranked: { item: AutocompleteItem; score: number; usage: number; order: number }[] = [];
 	const collapseSkills = nextCandidates !== undefined && !lowerPrefix.startsWith(SKILL_NAMESPACE);
 	const approachesNamespace = SKILL_NAMESPACE.startsWith(lowerPrefix);
 	const commandTier = collapseSkills && !approachesNamespace ? strongestCommandTier(commands, lowerPrefix) : 0;
@@ -342,7 +352,7 @@ function buildSlashCommandCompletions(
 	let skillIcon: string | undefined;
 	let skillIconName: string | undefined;
 
-	const rank = (cmd: CommandEntry, name: string, nameScore: number): boolean => {
+	const rank = (cmd: CommandEntry, name: string, nameScore: number, order = 0): boolean => {
 		const staticDesc = getStaticCommandDescription(cmd);
 		const descScore = staticDesc ? subsequenceScore(lowerPrefix, staticDesc.toLowerCase()) * 0.5 : 0;
 		let score = Math.max(nameScore, descScore);
@@ -369,6 +379,7 @@ function buildSlashCommandCompletions(
 		ranked.push({
 			score,
 			usage: commandUsage?.(name) ?? 0,
+			order,
 			item: {
 				value,
 				label,
@@ -386,7 +397,8 @@ function buildSlashCommandCompletions(
 		const name = getCommandName(cmd);
 		if (!name) continue;
 		let skillTier = 0;
-		if (name.startsWith(SKILL_NAMESPACE)) {
+		const isSkill = name.startsWith(SKILL_NAMESPACE);
+		if (isSkill) {
 			if (collapseSkills && approachesNamespace) {
 				// Any skill may appear when the user completes or leaves `skill:`.
 				skillCount++;
@@ -405,7 +417,7 @@ function buildSlashCommandCompletions(
 			}
 		}
 		const nameScore = Math.max(skillTier, scoreCommandTextMatch(lowerPrefix, name.toLowerCase()));
-		if (rank(cmd, name, nameScore)) nextCandidates?.push(cmd);
+		if (rank(cmd, name, nameScore, isSkill ? 1 : 0)) nextCandidates?.push(cmd);
 	}
 	if (skillCount) {
 		const group = {
@@ -414,9 +426,15 @@ function buildSlashCommandCompletions(
 			...(skillIcon && { icon: skillIcon }),
 			...(skillIconName && { iconName: skillIconName }),
 		};
-		rank(group, group.name, lowerPrefix ? scoreCommandTextMatch(lowerPrefix, group.name) : 950);
+		rank(group, group.name, lowerPrefix ? scoreCommandTextMatch(lowerPrefix, group.name) : 950, 0);
 	}
-	return ranked.sort((a, b) => b.score - a.score || b.usage - a.usage).map(match => match.item);
+	if (namespaces && lowerPrefix.length > 0 && !lowerPrefix.startsWith(SKILL_NAMESPACE)) {
+		const gateTier = nextCandidates !== undefined ? strongestCommandTier(commands, lowerPrefix) : 0;
+		for (const hit of collectBareNamespaceBreakouts(namespaces, lowerPrefix, gateTier)) {
+			ranked.push(hit);
+		}
+	}
+	return ranked.sort((a, b) => b.score - a.score || b.usage - a.usage || a.order - b.order).map(match => match.item);
 }
 
 /** Exact/leading-prefix tier for ordinary command names and aliases. */
@@ -455,6 +473,65 @@ function skillBareNameBreakoutTier(lowerPrefix: string, lowerBareName: string): 
 	}
 
 	return 0;
+}
+
+/**
+ * Match a bare hint value (`/agent:<name>`, `/model:<selector>`, `/local:<path>`)
+ * from the start of the value, its basename after `/`, or any `-`/`_`/`/` segment.
+ * Exact matches on the full bare value or basename score 1000; prefix/segment hits
+ * score 900. Never matches descriptions or scattered subsequences.
+ */
+function hintBareNameBreakoutTier(lowerPrefix: string, lowerBareName: string): number {
+	if (lowerPrefix.length === 0 || lowerBareName.length === 0) return 0;
+	if (lowerPrefix === lowerBareName) return 1000;
+	const lastSlash = lowerBareName.lastIndexOf("/");
+	if (lastSlash !== -1 && lowerPrefix === lowerBareName.slice(lastSlash + 1)) return 1000;
+	if (lowerBareName.startsWith(lowerPrefix)) return 900;
+
+	let segmentStart = 0;
+	while (segmentStart < lowerBareName.length) {
+		while (segmentStart < lowerBareName.length) {
+			const code = lowerBareName.charCodeAt(segmentStart);
+			if (code === 45 /* - */ || code === 95 /* _ */ || code === 47 /* / */) break;
+			segmentStart += 1;
+		}
+		segmentStart += 1;
+		if (segmentStart >= lowerBareName.length) break;
+		if (lowerBareName.startsWith(lowerPrefix, segmentStart)) return 900;
+	}
+	return 0;
+}
+
+const DEFAULT_MAX_BARE_NAMESPACE_MATCHES = 8;
+
+function collectBareNamespaceBreakouts(
+	namespaces: readonly InlineNamespace[],
+	lowerPrefix: string,
+	gateTier: number,
+): { item: AutocompleteItem; score: number; usage: number; order: number }[] {
+	const out: { item: AutocompleteItem; score: number; usage: number; order: number }[] = [];
+	for (let i = 0; i < namespaces.length; i += 1) {
+		const ns = namespaces[i]!;
+		if (!ns.barePrefix || !ns.getSyncCompletions) continue;
+		const items = ns.getSyncCompletions(lowerPrefix);
+		if (!items || items.length === 0) continue;
+		const limit = ns.maxBareMatches ?? DEFAULT_MAX_BARE_NAMESPACE_MATCHES;
+		const hits: { item: AutocompleteItem; score: number; usage: number; order: number }[] = [];
+		for (const item of items) {
+			const lowerValue = item.value.toLowerCase();
+			const lowerBare = lowerValue.startsWith(ns.prefix.toLowerCase())
+				? lowerValue.slice(ns.prefix.length)
+				: lowerValue;
+			const tier = hintBareNameBreakoutTier(lowerPrefix, lowerBare);
+			if (tier <= gateTier) continue;
+			hits.push({ item, score: tier, usage: 0, order: 2 + i });
+		}
+		hits.sort((a, b) => b.score - a.score);
+		for (let j = 0; j < hits.length && j < limit; j += 1) {
+			out.push(hits[j]!);
+		}
+	}
+	return out;
 }
 
 /** A bare skill breaks out only when it beats every ordinary name and alias. */
@@ -499,7 +576,11 @@ export function midPromptSkillTokenMatches(lowerToken: string, name: string, des
 	);
 }
 
-function buildMidPromptSkillCompletions(commands: CommandEntry[], lowerPrefix: string): AutocompleteItem[] {
+function buildMidPromptSkillCompletions(
+	commands: CommandEntry[],
+	lowerPrefix: string,
+	namespaces?: readonly InlineNamespace[],
+): AutocompleteItem[] {
 	return buildSlashCommandCompletions(
 		commands.filter(cmd => {
 			const name = getCommandName(cmd);
@@ -509,6 +590,9 @@ function buildMidPromptSkillCompletions(commands: CommandEntry[], lowerPrefix: s
 			);
 		}),
 		lowerPrefix,
+		undefined,
+		undefined,
+		namespaces,
 	);
 }
 
@@ -578,7 +662,13 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const previous = this.#previousSlash;
 		const commands = previous && lowerPrefix.startsWith(previous.prefix) ? previous.candidates : this.#commands;
 		const candidates: CommandEntry[] = [];
-		const items = buildSlashCommandCompletions(commands, lowerPrefix, this.#commandUsage, candidates);
+		const items = buildSlashCommandCompletions(
+			commands,
+			lowerPrefix,
+			this.#commandUsage,
+			candidates,
+			this.#namespaces,
+		);
 		this.#previousSlash = { prefix: lowerPrefix, candidates };
 		return items;
 	}
@@ -630,7 +720,11 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 				const lowerPrefix = prefix.toLowerCase();
 
 				const matches = isMidPromptSkillLookup
-					? buildMidPromptSkillCompletions(this.#commands, lowerPrefix)
+					? buildMidPromptSkillCompletions(
+							this.#commands,
+							lowerPrefix,
+							allowsSkillTokens(lines[0] ?? "") ? this.#namespaces : undefined,
+						)
 					: this.#submittedSlashCompletions(lowerPrefix);
 
 				if (matches.length > 0) {
@@ -773,7 +867,7 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 		const leadingSlashStart = findLeadingSlashCommandStart(textBeforeCursor);
 		const trailingSlashStart = findTrailingSlashCommandStart(textBeforeCursor);
 		const isMidPromptSkillLookup =
-			item.value.startsWith("skill:") &&
+			(item.value.startsWith(SKILL_NAMESPACE) || this.isNamespaceValue(item.value)) &&
 			trailingSlashStart !== null &&
 			hasPromptTextBeforeSlash(lines, cursorLine, textBeforeCursor, trailingSlashStart) &&
 			findTrailingSlashCommandStart(prefix) !== null;
@@ -809,7 +903,8 @@ export class CombinedAutocompleteProvider implements AutocompleteProvider {
 			const slashPrefix = textBeforeCursor.slice(leadingSlashStart);
 			// A `/` past the leading one usually means an absolute path, but a
 			// namespaced skill (`skill:<ns>/<name>`) is a real command name too.
-			const isKnownCommand = this.#commands.some(cmd => commandMatchesNameOrAlias(cmd, item.value));
+			const isKnownCommand =
+				this.#commands.some(cmd => commandMatchesNameOrAlias(cmd, item.value)) || this.isNamespaceValue(item.value);
 			if (!slashPrefix.includes(" ") && (isKnownCommand || !slashPrefix.slice(1).includes("/"))) {
 				const beforeSlash = currentLine.slice(0, leadingSlashStart);
 				// The collapsed `/skill:` namespace row completes to the namespace

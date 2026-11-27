@@ -62,6 +62,7 @@ import {
 	StructuredSubagentError,
 	type StructuredSubagentRequest,
 } from "./structured-subagent";
+import { seedAgentDiscoveryCache } from "./agent-completions";
 import { type SpawnPermit, SpawnRun } from "./spawn-run";
 import { type TaskLauncher, TaskLaunchSession } from "./speculative-launch";
 import type { TextTap } from "../job-widgets/text-tap";
@@ -628,9 +629,16 @@ function discoverAgentsForCreate(cwd: string, extensionRoots?: EffectiveExtensio
 	if (!pending) {
 		pending = fn(cwd, undefined, extensionRoots);
 		discoveryMemo.set(key, pending);
-		pending.catch(() => {
-			if (discoveryMemo.get(key) === pending) discoveryMemo.delete(key);
-		});
+		pending.then(
+			result => {
+				if (discoveryMemo.get(key) === pending) {
+					seedAgentDiscoveryCache(cwd, extensionRoots, result.agents);
+				}
+			},
+			() => {
+				if (discoveryMemo.get(key) === pending) discoveryMemo.delete(key);
+			},
+		);
 	}
 	return pending;
 }
@@ -643,6 +651,7 @@ export async function refreshAgentDiscovery(cwd: string, extensionRoots?: Effect
 	const { agents } = await pending;
 	if (discoveryMemo.get(key) === pending) {
 		discoverySnapshots.set(key, agents);
+		seedAgentDiscoveryCache(cwd, extensionRoots, agents);
 	}
 }
 

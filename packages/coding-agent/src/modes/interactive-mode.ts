@@ -76,7 +76,15 @@ import type { FileSlashCommand } from "../extensibility/slash-commands";
 import { loadSlashCommands } from "../extensibility/slash-commands";
 import type { GoalModeState } from "../goals/state";
 import { rescopeSessionToCwd } from "../session/cwd-rescope";
-import { copyLocalArtifacts, resolveLocalRoot } from "../internal-urls";
+import {
+	copyLocalArtifacts,
+	resolveLocalRoot,
+	resolveLocalUrlToPath,
+	sessionLocalProtocolOptions,
+} from "../internal-urls";
+import { getCachedAgentCompletions, listAgentCompletions } from "../task/agent-completions";
+import { cfgTaskDisabledAgents } from "../task/settings";
+import { encodeLocalPath } from "./local-file-editor";
 
 import { LSP_STARTUP_EVENT_CHANNEL, type LspStartupEvent } from "../lsp/startup-events";
 import type { MCPManager } from "../mcp";
@@ -1530,6 +1538,28 @@ export class InteractiveMode implements InteractiveModeContext {
 				logger.warn("Extension message renderer failed", { customType, error: String(error) }),
 			imageLinks: (_message, images) => imageLinksForMessage(images, this.viewSession.sessionManager),
 			skillPath: name => this.skillCommands.get(`skill:${name}`)?.filePath,
+			agentPath: name => {
+				const input = {
+					cwd: this.viewSession.sessionManager.getCwd(),
+					extensionRoots: this.viewSession.effectiveExtensionRoots,
+					disabledAgents: cfgTaskDisabledAgents.get(this.settings),
+					sessionAgents: this.viewSession.getSessionAgents(),
+				};
+				const cached = getCachedAgentCompletions(input);
+				if (cached.stale) void listAgentCompletions(input);
+				return cached.items.find(agent => agent.name === name)?.filePath;
+			},
+			localPath: relativePath => {
+				try {
+					return resolveLocalUrlToPath(
+						`local://${encodeLocalPath(relativePath)}`,
+						sessionLocalProtocolOptions(this.viewSession.sessionManager),
+					);
+				} catch {
+					return undefined;
+				}
+			},
+			modelLabel: selector => this.session.resolveModelMention(selector)?.name,
 			actions: () => true,
 			hour12: this.shell.hour12,
 			promptZones: promptZonesEnabled,

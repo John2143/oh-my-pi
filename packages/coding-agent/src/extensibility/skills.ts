@@ -920,17 +920,19 @@ export function renderSkillPromptMessage(
 ): BuiltSkillPromptMessage {
 	const trimmedArgs = input.args.trim();
 	let message: string;
+	let expandedUserArgs: string | undefined;
 	if (invocation === "user") {
 		// The user chose this skill in their draft: show the draft as typed, hint
 		// tokens included, so the request reads the way it was written. A draft with
 		// nothing but tokens carries no request of its own, so it shows no user line.
 		const userArgs = trimmedArgs ? (input.prompt ?? input.args).trim() : "";
+		expandedUserArgs = userArgs ? (options?.expandUserArgs?.(userArgs) ?? userArgs) : undefined;
 		message = prompt
 			.render(userInvocationTemplate, {
 				name: skill.name,
 				body,
 				baseDir: skill.baseDir,
-				userArgs: userArgs ? (options?.expandUserArgs?.(userArgs) ?? userArgs) : undefined,
+				userArgs: expandedUserArgs,
 			})
 			.trim();
 	} else {
@@ -951,6 +953,7 @@ export function renderSkillPromptMessage(
 			path: skill.filePath,
 			args: trimmedArgs || undefined,
 			prompt: input.prompt,
+			...(expandedUserArgs !== undefined ? { __expandedUserArgs: expandedUserArgs } : {}),
 			lineCount: body ? body.split("\n").length : 0,
 		},
 	};
@@ -981,11 +984,12 @@ export function renderUserSkillPrompts(
 	// The draft reaches the model as typed. `args` only decides whether the draft
 	// says anything beyond its tokens; a draft that is just tokens shows no user line.
 	const userArgs = args ? (input.prompt ?? input.args).trim() : "";
+	const expandedUserArgs = userArgs ? (options?.expandUserArgs?.(userArgs) ?? userArgs) : undefined;
 	const message = prompt
 		.render(userInvocationsTemplate, {
 			count: loaded.length,
 			skills: loaded.map(({ skill, body }) => ({ name: skill.name, baseDir: skill.baseDir, body })),
-			userArgs: userArgs ? (options?.expandUserArgs?.(userArgs) ?? userArgs) : undefined,
+			userArgs: expandedUserArgs,
 		})
 		.trim();
 	return {
@@ -995,6 +999,7 @@ export function renderUserSkillPrompts(
 			path: first.skill.filePath,
 			args: args || undefined,
 			prompt: input.prompt,
+			...(expandedUserArgs !== undefined ? { __expandedUserArgs: expandedUserArgs } : {}),
 			lineCount: first.body ? first.body.split("\n").length : 0,
 			skills: loaded.map(skillPromptEntry),
 		},

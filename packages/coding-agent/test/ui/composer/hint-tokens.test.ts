@@ -13,27 +13,37 @@ const FILES = ["plans/x.md", "src/fi.ts"];
 const namespaces: readonly InlineNamespace[] = [
 	{
 		prefix: "agent:",
+		barePrefix: true,
 		getCompletions: (query: string) => {
 			const lower = query.toLowerCase();
 			return AGENTS.filter(name => name.includes(lower)).map(name => ({
 				value: `agent:${name}`,
-				label: name,
+				label: `agent:${name}`,
 			}));
 		},
-	},
-	{
-		prefix: "model:",
-		getCompletions: (query: string) => {
-			const lower = query.toLowerCase();
-			return MODELS.filter(id => id.includes(lower)).map(id => ({ value: `model:${id}`, label: id }));
-		},
+		getSyncCompletions: () => AGENTS.map(name => ({ value: `agent:${name}`, label: `agent:${name}` })),
 	},
 	{
 		prefix: "local:",
+		barePrefix: true,
 		getCompletions: (query: string) => {
 			const lower = query.toLowerCase();
-			return FILES.filter(name => name.includes(lower)).map(name => ({ value: `local:${name}`, label: name }));
+			return FILES.filter(name => name.includes(lower)).map(name => ({
+				value: `local:${name}`,
+				label: `local:${name}`,
+			}));
 		},
+		getSyncCompletions: () => FILES.map(name => ({ value: `local:${name}`, label: `local:${name}` })),
+	},
+	{
+		prefix: "model:",
+		barePrefix: true,
+		maxBareMatches: 5,
+		getCompletions: (query: string) => {
+			const lower = query.toLowerCase();
+			return MODELS.filter(id => id.includes(lower)).map(id => ({ value: `model:${id}`, label: `model:${id}` }));
+		},
+		getSyncCompletions: () => MODELS.map(id => ({ value: `model:${id}`, label: `model:${id}` })),
 	},
 ];
 
@@ -204,5 +214,91 @@ describe("Composer hint-token completion", () => {
 		type(shell, "!echo /agent:");
 		await settle();
 		expect(shell.completing()).toBe(false);
+	});
+
+	it("completes bare-prefix `/sco`, `/flash`, and `/plan` at prompt start without submitting on Enter", async () => {
+		const composer = new Composer({
+			autocomplete: new CombinedAutocompleteProvider(
+				[
+					{ name: "model", description: "Switch model" },
+					{ name: "local", description: "Open local file" },
+					{ name: "session", description: "Session management commands" },
+				],
+				"/tmp",
+				{ namespaces },
+			),
+		});
+		let submitted: string | undefined;
+		composer.onSubmit = text => {
+			submitted = text;
+		};
+
+		type(composer, "/sco");
+		await offered(composer, "agent:scout");
+		sendKey(composer.node, composer.field, key("\r"));
+		expect(composer.text()).toBe("/agent:scout ");
+		expect(submitted).toBeUndefined();
+
+		composer.setText("");
+		type(composer, "/flash");
+		await offered(composer, "model:deepseek/deepseek-flash");
+		sendKey(composer.node, composer.field, key("\t"));
+		expect(composer.text()).toBe("/model:deepseek/deepseek-flash ");
+
+		composer.setText("");
+		type(composer, "/plan");
+		await offered(composer, "local:plans/x.md");
+		sendKey(composer.node, composer.field, key("\t"));
+		expect(composer.text()).toBe("/local:plans/x.md ");
+	});
+
+	it("completes bare-prefix hints mid-prompt and keeps surrounding prose", async () => {
+		const composer = new Composer({
+			autocomplete: new CombinedAutocompleteProvider(
+				[{ name: "skill:investigation", description: "Investigate" }],
+				"/tmp",
+				{
+					namespaces,
+				},
+			),
+		});
+
+		type(composer, "ask /sco");
+		await offered(composer, "agent:scout");
+		sendKey(composer.node, composer.field, key("\t"));
+		expect(composer.text()).toBe("ask /agent:scout ");
+
+		type(composer, "using /sonnet");
+		await offered(composer, "model:anthropic/claude-sonnet");
+		sendKey(composer.node, composer.field, key("\t"));
+		expect(composer.text()).toBe("ask /agent:scout using /model:anthropic/claude-sonnet ");
+
+		type(composer, "on /fi");
+		await offered(composer, "local:src/fi.ts");
+		sendKey(composer.node, composer.field, key("\t"));
+		expect(composer.text()).toBe("ask /agent:scout using /model:anthropic/claude-sonnet on /local:src/fi.ts ");
+	});
+
+	it("keeps matching builtin commands ahead of bare-prefix hints and suppresses mid-prompt hints in commands", async () => {
+		const provider = new CombinedAutocompleteProvider(
+			[
+				{ name: "model", description: "Switch model" },
+				{ name: "local", description: "Open local file" },
+				{ name: "switch", description: "Switch model" },
+			],
+			"/tmp",
+			{ namespaces },
+		);
+
+		// `/s` matches `/switch` (prefix tier 900), so `agent:scout` and `local:src/fi.ts` (900) do not break out.
+		const sValues = provider.trySyncSlashCompletion("/s")?.items.map(item => item.value) ?? [];
+		expect(sValues[0]).toBe("switch");
+		expect(sValues).not.toContain("agent:scout");
+		expect(sValues).not.toContain("local:src/fi.ts");
+		// `/sc` drops `/switch` (tier 0), so `agent:scout` breaks out immediately.
+		expect(provider.trySyncSlashCompletion("/sc")?.items[0]?.value).toBe("agent:scout");
+		// `/compact /sco` and `!echo /sco` do not offer bare-prefix hint completions.
+		expect(await provider.getSuggestions(["/compact /sco"], 0, "/compact /sco".length)).toBeNull();
+		expect(await provider.getSuggestions(["!echo /sco"], 0, "!echo /sco".length)).toBeNull();
 	});
 });

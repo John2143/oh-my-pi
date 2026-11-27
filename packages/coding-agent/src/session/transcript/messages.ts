@@ -93,6 +93,10 @@ export interface SkillPromptDetails {
 	 *  `details` by `SessionManager.appendCustomMessageEntry` via the
 	 *  `INTERNAL_DETAILS_FIELDS` allowlist below. */
 	__queueChipText?: string;
+	/** Internal: hint-expanded user args for a user-invoked skill prompt, used to
+	 *  build per-turn hint/session-agent notices without scanning the `SKILL.md`
+	 *  body. Stripped before persistence via `INTERNAL_DETAILS_FIELDS`. */
+	__expandedUserArgs?: string;
 }
 
 /** Sentinel value for `AssistantMessage.errorMessage` indicating that the abort

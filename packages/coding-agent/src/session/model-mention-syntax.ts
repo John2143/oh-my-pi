@@ -34,6 +34,8 @@ export const MODEL_MENTION_TAG_RE = /<model agent="(m\d+)" name="([^"]*)"\/>/g;
 /** A user-tagged model usable as a subagent pseudonym on the current session branch. */
 export interface ModelMention {
 	agent: string;
+	/** Base agent template cloned for this pseudonym (absent means the bundled `task` agent). */
+	baseAgent?: string;
 	/** Canonical selector: `provider/id`, plus `:<effort>` when the tag names one. */
 	selector: string;
 	name: string;

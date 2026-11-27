@@ -39,6 +39,12 @@ export interface UserMessageModel {
 	readonly liveSteered?: boolean;
 	/** SKILL.md path of a skill chip, by skill name. */
 	readonly skillPath?: (name: string) => string | undefined;
+	/** Agent `.md` path of an `/agent:` chip, by agent name. */
+	readonly agentPath?: (name: string) => string | undefined;
+	/** On-disk path of a `/local:` chip, by relative session path. */
+	readonly localPath?: (relativePath: string) => string | undefined;
+	/** Display name of a `/model:` chip, by model selector. */
+	readonly modelLabel?: (selector: string) => string | undefined;
 	/** Magic keywords that glow in the prompt (the enabled ones); none when absent. */
 	readonly magicKeywords?: Reactive<readonly GlowingKeyword[]>;
 	/** When the message was sent (ms). */
@@ -135,7 +141,7 @@ export function SyntheticMessage(props: {
 	onToggle?: (expanded: boolean) => void;
 }): JSXNode {
 	const { expanded, toggle } = cardExpansion(props.expanded, props.onToggle);
-	const display = chipText(props.text, { imageLinks: props.imageLinks });
+	const display = chipText(props.text, { imageLinks: props.imageLinks, hintTokens: false });
 	const term = {
 		synthetic: true,
 		display: display.text,
@@ -162,6 +168,10 @@ export function UserMessage(props: { model: UserMessageModel }): JSXNode {
 	const display = chipText(model.text, {
 		imageLinks: model.imageLinks,
 		skillPath: model.skillPath,
+		agentPath: model.agentPath,
+		localPath: model.localPath,
+		modelLabel: model.modelLabel,
+		hintTokens: !synthetic,
 	});
 	const chipSpans = synthetic ? [] : chipMarks(display.chips);
 	const chips = termChips(display.chips);

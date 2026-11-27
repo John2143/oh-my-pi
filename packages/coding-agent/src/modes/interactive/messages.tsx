@@ -71,6 +71,12 @@ export interface MessageFaceEnv {
 	imageLinks(message: AgentMessage, images: readonly ImageContent[]): (string | undefined)[] | undefined;
 	/** SKILL.md of a skill chip. */
 	skillPath(name: string): string | undefined;
+	/** Agent `.md` path of an `/agent:` chip. */
+	agentPath?(name: string): string | undefined;
+	/** On-disk path of a `/local:` chip. */
+	localPath?(relativePath: string): string | undefined;
+	/** Display name of a `/model:` chip. */
+	modelLabel?(selector: string): string | undefined;
 	/** Whether a host handles transcript actions (the prompt's copy/edit controls). */
 	readonly actions: Accessor<boolean>;
 	/** The terminal's clock (`hour12`) prompt times follow; the locale default when undefined. */
@@ -180,7 +186,14 @@ function customFace(message: CustomOrHookMessage, env: MessageFaceEnv): MessageF
 		const skill = message as CustomMessage<SkillPromptDetails>;
 		return {
 			face: fold => (
-				<SkillMessage content={skill.content} details={skill.details} {...(fold ?? { expanded: env.expanded })} />
+				<SkillMessage
+					content={skill.content}
+					details={skill.details}
+					agentPath={env.agentPath}
+					localPath={env.localPath}
+					modelLabel={env.modelLabel}
+					{...(fold ?? { expanded: env.expanded })}
+				/>
 			),
 			presented: message,
 		};
@@ -283,6 +296,9 @@ function promptFace(
 					synthetic,
 					liveSteered: message.role === "user" && message.liveSteered === true,
 					skillPath: env.skillPath,
+					agentPath: env.agentPath,
+					localPath: env.localPath,
+					modelLabel: env.modelLabel,
 					timestamp: message.timestamp,
 					hour12: env.hour12,
 					reaction,

@@ -51,7 +51,7 @@ function mentionRow(value: string, description: string): AutocompleteItem {
  * Some provider model ids contain a colon or end in a level name (`qwen3:8b`, `glm-4.7:max`),
  * so literal matches are listed before level rows.
  */
-function mentionRows(query: string, candidates: ModelMentionCandidateSource): AutocompleteItem[] {
+export function getModelMentionRows(query: string, candidates: ModelMentionCandidateSource): AutocompleteItem[] {
 	const colon = query.lastIndexOf(":");
 	if (colon > 0) {
 		const typed = query.slice(colon + 1).toLowerCase();
@@ -96,7 +96,7 @@ export function getModelMentionSuggestions(
 	if (!prefix) return { kind: "unhandled" };
 	// Discovery can produce the first match as well as extend an existing list.
 	const pending = candidates.retryDiscovery?.();
-	const items = mentionRows(prefix.slice(1), candidates).slice(0, MAX_MODEL_MENTION_SUGGESTIONS);
+	const items = getModelMentionRows(prefix.slice(1), candidates).slice(0, MAX_MODEL_MENTION_SUGGESTIONS);
 	return items.length > 0
 		? { kind: "matched", suggestions: { items, prefix }, pending }
 		: { kind: "no-match", pending };

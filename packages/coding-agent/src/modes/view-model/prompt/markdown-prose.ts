@@ -157,8 +157,9 @@ function maskTagAt(text: string, i: number, n: number, masked: Uint8Array): numb
  * with the content they enclose. Newlines are preserved. Text with no construct
  * that could open such a region is returned unchanged.
  */
-export function maskNonProse(text: string): string {
-	if (!text.includes("`") && !text.includes("<") && !text.includes("~~~")) {
+export function maskNonProse(text: string, options?: { maskTags?: boolean }): string {
+	const maskTags = options?.maskTags !== false;
+	if (!text.includes("`") && !text.includes("~~~") && (!maskTags || !text.includes("<"))) {
 		return text;
 	}
 	const n = text.length;
@@ -218,7 +219,7 @@ export function maskNonProse(text: string): string {
 			}
 			continue;
 		}
-		if (c === "<") {
+		if (maskTags && c === "<") {
 			const end = maskTagAt(text, i, n, masked);
 			i = end > i ? end : i + 1;
 			continue;
