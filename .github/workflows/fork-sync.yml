@@ -34,6 +34,10 @@ on:
         description: "Re-verify the current john tip even when upstream has not moved"
         type: boolean
         default: false
+      simulate_failure:
+        description: "Fail on purpose right after checkout to test the failure report"
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -93,6 +97,12 @@ jobs:
         run: |
           git config user.name "omp fork sync"
           git config user.email "john@john2143.com"
+
+      - name: Simulate a failure (notification test)
+        if: inputs.simulate_failure
+        run: |
+          echo "::error::Simulated failure requested by workflow_dispatch"
+          exit 1
 
       - name: Rebase onto upstream/main
         id: rebase
@@ -217,44 +227,64 @@ jobs:
           NTFY_TOPIC_URL: ${{ secrets.NTFY_TOPIC_URL }}
         with:
           script: |
-            const title = "fork-sync: john needs attention";
+            const simulated = "${{ inputs.simulate_failure }}" === "true";
+            const title = simulated ? "fork-sync: notification test" : "fork-sync: john needs attention";
+            const runUrl = `${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`;
             const rebaseConflict = "${{ steps.rebase.outputs.changed }}" === "conflict";
-            const what = rebaseConflict
-              ? "rebasing `john` onto `upstream/main` hit a conflict."
-              : "the rebase applied cleanly but verification failed, so `john` was not pushed.";
-            const body = [
-              `${what}`,
-              "",
-              `Run: ${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
-              "",
-              "Fix by hand with the replay instructions in `fork-patches.md`, then push `john`.",
-            ].join("\n");
-            const { data: open } = await github.rest.issues.listForRepo({
-              owner: context.repo.owner,
-              repo: context.repo.repo,
-              state: "open",
-              per_page: 100,
-            });
-            const existing = open.find(issue => issue.title === title);
-            if (existing) {
-              await github.rest.issues.createComment({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                issue_number: existing.number,
-                body,
-              });
-            } else {
-              await github.rest.issues.create({
-                owner: context.repo.owner,
-                repo: context.repo.repo,
-                title,
-                body,
-              });
-            }
+            const what = simulated
+              ? "this is a simulated failure (simulate_failure=true); nothing is wrong with `john`."
+              : rebaseConflict
+                ? "rebasing `john` onto `upstream/main` hit a conflict."
+                : "the rebase applied cleanly but verification failed, so `john` was not pushed.";
+            const body = [what, "", `Run: ${runUrl}`, "",
+              "Fix by hand with the replay instructions in `fork-patches.md`, then push `john`."].join("\n");
+
+            // 1. Step summary: needs no API call, so it cannot be lost.
+            await core.summary.addHeading(title, 3).addRaw(`${what}\n\n${runUrl}`).write();
+
+            // 2. Phone first: the page must not depend on the GitHub API (run 45647041408 lost its
+            //    report to an HTTP 500 from the issues endpoint).
+            let notified = false;
             if (process.env.NTFY_TOPIC_URL) {
-              await fetch(process.env.NTFY_TOPIC_URL, {
-                method: "POST",
-                headers: { Title: "omp fork sync failed", Priority: "high", Tags: "rotating_light" },
-                body: `${what}\n${context.serverUrl}/${context.repo.owner}/${context.repo.repo}/actions/runs/${context.runId}`,
+              try {
+                const res = await fetch(process.env.NTFY_TOPIC_URL, {
+                  method: "POST",
+                  headers: { Title: "omp fork sync failed", Priority: "high", Tags: "rotating_light" },
+                  body: `${what}\n${runUrl}`,
+                });
+                notified = res.ok;
+                if (!res.ok) core.warning(`ntfy returned HTTP ${res.status}`);
+              } catch (e) {
+                core.warning(`ntfy post failed: ${e.message}`);
+              }
+            } else {
+              core.warning("NTFY_TOPIC_URL secret is not set; no push notification sent");
+            }
+
+            // 3. Issue, retried once.
+            const report = async () => {
+              const { data: open } = await github.rest.issues.listForRepo({
+                owner: context.repo.owner, repo: context.repo.repo, state: "open", per_page: 100,
               });
+              const existing = open.find(issue => issue.title === title);
+              if (existing) {
+                await github.rest.issues.createComment({
+                  owner: context.repo.owner, repo: context.repo.repo, issue_number: existing.number, body,
+                });
+              } else {
+                await github.rest.issues.create({ owner: context.repo.owner, repo: context.repo.repo, title, body });
+              }
+            };
+            let reported = false;
+            for (let attempt = 1; attempt <= 2 && !reported; attempt++) {
+              try {
+                await report();
+                reported = true;
+              } catch (e) {
+                core.warning(`issue report attempt ${attempt} failed: HTTP ${e.status ?? "?"} ${e.message}`);
+                if (attempt === 1) await new Promise(resolve => setTimeout(resolve, 15000));
+              }
+            }
+            if (!notified && !reported) {
+              core.setFailed("fork-sync failure was reported nowhere: ntfy and the issue API both failed");
             }
