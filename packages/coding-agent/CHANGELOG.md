@@ -8,6 +8,8 @@
 
 ### Added
 
+- Invoking several `/skill:<name>` tokens in one draft now attaches every named skill's instructions above the request, chips each attached skill in the transcript card (`2 skills · N lines`), and sends the draft with every token in place ([#4](https://github.com/John2143/oh-my-pi/pull/4))
+- `/agent:<name>`, `/model:<selector>`, and `/local:<path>` complete inline (both explicitly and by bare `/prefix`, like `/sco` → `/agent:scout`), render as colored inline chips in the composer and transcript, expand cleanly on submit (`<agent name="…"/>`, `<model agent="m<N>" name="…"/>` with specialist cloning when paired, and `local://<path>`), and prepend a hidden per-turn notice with agent descriptions and direct `task` call guidance ([#4](https://github.com/John2143/oh-my-pi/pull/4))
 - Added `statusLine.segmentOptions.model.showProvider` to prefix the status-line model with its provider (`anthropic/Opus 4.8`) and `statusLine.segmentOptions.model.display` (`name`, `id` or `full`) to show the exact model id, with `statusLine.segmentOptions.model.maxLength` to cap the label ([#20559](https://github.com/can1357/oh-my-pi/pull/20559) by [@Xytronix](https://github.com/Xytronix))
 - Dictation now works with xAI speech-to-text models such as `xai-oauth/grok-voice-transcribe-2.0` ([#19184](https://github.com/can1357/oh-my-pi/pull/19184) by [@Xytronix](https://github.com/Xytronix))
 - `/fast` now switches Devin models onto their fast lanes, replacing the separate Devin Fast model entries; set `tier.devin: priority` to start every session in fast mode
@@ -15,6 +17,7 @@
 
 ### Changed
 
+- `/model:` and `/local:` are hints now: the colon form reaches the model, while `/model x` and `/local x` still run those commands; every other command keeps colon arguments (`/switch:sonnet`, `/btw:hi`, `/force:bash`) ([#4](https://github.com/John2143/oh-my-pi/pull/4))
 - Bash loads approved `.envrc` and opt-in `.env` files without a `direnv` executable on `PATH`, using the exact file contents checked for approval.
 - URL reads keep cookies across redirects, follow meta refresh, and fall back to the headless browser when a site blocks plain fetch.
 - URL reads use the native reader for X, YouTube, docs.rs, Discourse, and Mastodon; raw reads still skip site-specific rendering.

@@ -13,6 +13,7 @@ import {
 	type AutocompleteProvider,
 	CombinedAutocompleteProvider,
 	findLeadingSlashCommandStart,
+	type InlineNamespace,
 	type ModelMentionCompletion,
 	type SlashCommand,
 	subsequenceMatch,
@@ -58,6 +59,8 @@ interface PromptActionAutocompleteOptions {
 	internalUrlCaller?: () => InternalUrlCallerContext;
 	/** Session-scoped models available for `^` mentions. */
 	modelMentions?: ModelMentionCandidateSource;
+	/** `/agent:`, `/model:`, `/local:` hint tokens completed inline. */
+	namespaces?: readonly InlineNamespace[];
 	emojiAutocomplete?: () => boolean;
 	keybindings: KeybindingsManager;
 	copyCurrentLine: () => void;
@@ -119,9 +122,10 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		internalUrlCaller?: () => InternalUrlCallerContext,
 		modelMentions?: ModelMentionCandidateSource,
 		emojiAutocomplete: () => boolean = () => emojiAutocompleteEnabled,
+		namespaces?: readonly InlineNamespace[],
 	) {
 		this.#commands = commands;
-		this.#baseProvider = new CombinedAutocompleteProvider(commands, basePath, { commandUsage });
+		this.#baseProvider = new CombinedAutocompleteProvider(commands, basePath, { commandUsage, namespaces });
 		this.#internalUrlCaller = internalUrlCaller ?? (() => ({ cwd: basePath }));
 		this.#modelMentions = modelMentions;
 		this.#emojiAutocomplete = emojiAutocomplete;
@@ -137,6 +141,11 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 	): Promise<{ items: AutocompleteItem[]; prefix: string } | null> {
 		if (signal?.aborted) return null;
 		const textBeforeCursor = (lines[cursorLine] || "").slice(0, cursorCol);
+		// Hint tokens outrank mentions and prompt actions: the token is prose, so
+		// nothing else in this draft may claim the cursor.
+		if (this.#baseProvider.isNamespaceToken(textBeforeCursor)) {
+			return this.#baseProvider.getSuggestions(lines, cursorLine, cursorCol, signal, onPartial);
+		}
 		if (!this.#outranksModelMention(lines, cursorLine, textBeforeCursor)) {
 			const modelMention = await this.#modelMentionSuggestions(textBeforeCursor, signal, onPartial);
 			if (modelMention) return modelMention;
@@ -217,6 +226,7 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 
 	#outranksModelMention(lines: string[], cursorLine: number, textBeforeCursor: string): boolean {
 		return (
+			this.#baseProvider.isNamespaceToken(textBeforeCursor) ||
 			this.#isInSlashCommandArguments(lines, cursorLine, textBeforeCursor) ||
 			getGithubRefContext(textBeforeCursor) !== null ||
 			getPromptActionPrefix(textBeforeCursor) !== null
@@ -307,6 +317,15 @@ export class PromptActionAutocompleteProvider implements AutocompleteProvider {
 		if (!this.#emojiAutocomplete()) return null;
 		return tryEmojiInlineReplace(textBeforeCursor);
 	}
+	isNamespaceToken(textBeforeCursor: string): boolean {
+		return this.#baseProvider.isNamespaceToken(textBeforeCursor);
+	}
+	isNamespaceValue(value: string): boolean {
+		return this.#baseProvider.isNamespaceValue(value);
+	}
+	matchesNamespaceQuery(textBeforeCursor: string, value: string): boolean {
+		return this.#baseProvider.matchesNamespaceQuery(textBeforeCursor, value);
+	}
 }
 
 export function createPromptActionAutocompleteProvider(
@@ -373,5 +392,6 @@ export function createPromptActionAutocompleteProvider(
 		options.internalUrlCaller,
 		options.modelMentions,
 		options.emojiAutocomplete,
+		options.namespaces,
 	);
 }

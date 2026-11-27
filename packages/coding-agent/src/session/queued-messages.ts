@@ -99,10 +99,16 @@ export const IMAGE_ATTACHMENT_TYPE = "image-attachment";
  */
 export const SESSION_AGENT_NOTICE_TYPE = "session-agent-notice";
 
+/**
+ * Hidden per-turn notice restating the agent description(s) and exact `task`
+ * invocation for user hint tokens (`/agent:`, paired `/model:`).
+ */
+export const HINT_TOKENS_NOTICE_TYPE = "hint-tokens-notice";
+
 /** Whether a hidden queued message is a companion of an adjacent user prompt. */
 export function isHiddenUserCompanion(message: AgentMessage): boolean {
 	if (message.role !== "custom" || message.display !== false) return false;
-	if (message.customType === SESSION_AGENT_NOTICE_TYPE) return true;
+	if (message.customType === SESSION_AGENT_NOTICE_TYPE || message.customType === HINT_TOKENS_NOTICE_TYPE) return true;
 	return (
 		message.attribution === "user" &&
 		(MAGIC_KEYWORD_NOTICE_TYPES.has(message.customType) ||

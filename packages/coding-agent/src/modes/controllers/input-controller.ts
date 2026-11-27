@@ -5,10 +5,15 @@ import { createRoot, effect, type KeyEvent, type PasteEvent, type UiNode, untrac
 import type { InputEvent } from "@oh-my-pi/pi-tui/driver/index";
 import { emergencyTerminalRestore } from "@oh-my-pi/pi-tui/driver/session";
 import { currentTheme } from "@oh-my-pi/pi-tui/theme/runtime";
-import { isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
-import type { AutocompleteProvider, SlashCommand } from "../../autocomplete/autocomplete";
+import { formatBytes, isEnoent, logger, postmortem, sanitizeText } from "@oh-my-pi/pi-utils";
+import type {
+	AutocompleteItem,
+	AutocompleteProvider,
+	InlineNamespace,
+	SlashCommand,
+} from "../../autocomplete/autocomplete";
 import { expandEmoticons } from "../../autocomplete/emoji";
-import { createModelMentionSource } from "../../autocomplete/model-mention";
+import { createModelMentionSource, getModelMentionRows } from "../../autocomplete/model-mention";
 import { createPromptActionAutocompleteProvider } from "../../autocomplete/prompt-actions";
 import type { Keybinding } from "../../config/keybindings/app-keybindings";
 import { canonicalKeyId } from "../../config/keybindings/key-id";
@@ -16,16 +21,30 @@ import { resolveModelRoleValue } from "../../config/model-resolver";
 import { formatModelRoleAlias, roleCandidatePool } from "../../config/model-roles";
 import { cfgCycleOrder } from "../../config/model-settings";
 import { isSettingsInitialized, settings } from "../../config/settings";
+import { HINT_TOKEN_PREFIXES, startsWithHintNamespace } from "../../extensibility/skill-tokens";
 import { parseFileSlashInvocation, renderFileSlashCommand } from "../../extensibility/slash-commands";
-import { InternalUrlRouter, resolveLocalRoot } from "../../internal-urls";
+import {
+	InternalUrlRouter,
+	type LocalFileEntry,
+	listLocalFiles,
+	resolveLocalRoot,
+	resolveLocalUrlToPath,
+	sessionLocalProtocolOptions,
+} from "../../internal-urls";
 import { invokeSkillCommandFromText, isKnownSkillCommand } from "../../modes/skill-command";
 import type { InteractiveModeContext, SubmittedUserInput } from "../../modes/types";
 import type { DequeuedMessage, RestoredQueuedMessage } from "../../session/agent-session-types";
 import { USER_INTERRUPT_LABEL } from "../../session/messages";
 import { cfgHideThinkingBlock } from "../../session/settings";
-import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
+import {
+	executeBuiltinSlashCommand,
+	lookupBuiltinSlashCommand,
+	resolveBuiltinInvocation,
+} from "../../slash-commands/builtin-registry";
 import { restoreDetachedDraft } from "../../slash-commands/helpers/draft";
 import { parseSlashCommand, parseSubcommand } from "../../slash-commands/helpers/parse";
+import { getCachedAgentCompletions, listAgentCompletions } from "../../task/agent-completions";
+import { cfgTaskDisabledAgents } from "../../task/settings";
 import { parseConfiguredThinkingLevel } from "../../thinking/levels";
 import { isTinyLocalModelKey } from "../../tiny/models";
 import { tinyTitleClient } from "../../tiny/title-client";
@@ -35,6 +54,7 @@ import { collapsesPaste } from "../../ui/composer/attachments";
 import { enabledMagicKeywords, magicKeywordDecorator } from "../../ui/composer/magic-keywords";
 import { attachQueueShorthand } from "../../ui/composer/queue-shorthand";
 import { combineAtomizers, FOCUS_ACTION } from "../../ui/composer/composer";
+import { hintTokenAtomizer } from "../../ui/composer/hint-chips";
 import { modelMentionAtomizer } from "../../ui/composer/model-mention-chips";
 import { skillAtomizer } from "../../ui/composer/skill-chips";
 import { getSkillSlashCommandName } from "../../extensibility/skills";
@@ -62,7 +82,7 @@ import { truncateToWidth } from "../../utils/text-width";
 import { commandUsage, hintUsage } from "../../utils/usage-counter";
 import { buildVideoContactSheetPng, probeVideo, VideoError } from "../../utils/video";
 import { isVideoPath } from "../../utils/video-preview";
-import { openLocalFileInEditor } from "../local-file-editor";
+import { encodeLocalPath, openLocalFileInEditor } from "../local-file-editor";
 import { createModelBrowserSource } from "../model-browser-source";
 import {
 	cfgBareExitOnEmptySession,
@@ -254,6 +274,9 @@ function containsNode(root: UiNode, node: UiNode): boolean {
 }
 
 export class InputController {
+	#localFilesCache: { key: string; items: readonly LocalFileEntry[]; at: number } | undefined;
+	#localFilesPending: Promise<readonly LocalFileEntry[]> | undefined;
+
 	constructor(
 		private ctx: InteractiveModeContext,
 		/** Injectable clipboard reads so tests can drive paste flows without a real clipboard. */
@@ -426,7 +449,7 @@ export class InputController {
 			attachQueueShorthand(composer, () => currentTheme().symbols.symbol("nav.selected")),
 		);
 		// A `/skill:<name>` of a known skill shows as a chip linking to its SKILL.md; a `^provider/id`
-		// mention of a taggable model as a model chip.
+		// mention of a taggable model as a model chip; known `/agent:`, `/model:`, `/local:` hints as chips.
 		composer.setAtomizer(
 			combineAtomizers(
 				skillAtomizer(
@@ -437,6 +460,31 @@ export class InputController {
 					resolve: selector => this.ctx.session.resolveModelMention(selector),
 					selectorOf: agent => this.ctx.session.modelMentions.find(mention => mention.agent === agent)?.selector,
 					icon: () => currentTheme().symbols.symbol("icon.model"),
+				}),
+				hintTokenAtomizer({
+					agent: name => {
+						const input = this.#getAgentCompletionInput();
+						const cached = getCachedAgentCompletions(input);
+						if (cached.stale) void listAgentCompletions(input).catch(() => {});
+						const hit = cached.items.find(agent => agent.name === name);
+						return hit ? (hit.filePath ? { path: hit.filePath } : {}) : undefined;
+					},
+					model: selector => this.ctx.session.resolveModelMention(selector),
+					local: relativePath => {
+						const entry = this.#getCachedLocalFiles().find(item => item.name === relativePath);
+						if (!entry) return undefined;
+						try {
+							return {
+								path: resolveLocalUrlToPath(
+									`local://${encodeLocalPath(relativePath)}`,
+									sessionLocalProtocolOptions(this.ctx.sessionManager),
+								),
+							};
+						} catch {
+							return {};
+						}
+					},
+					symbol: key => currentTheme().symbols.symbol(key),
 				}),
 			),
 		);
@@ -1670,10 +1718,8 @@ export class InputController {
 
 	/** Whether `text` dispatches to a builtin, matching executeBuiltinSlashCommand(). */
 	#matchesBuiltinSlashCommand(text: string): boolean {
-		const parsed = parseSlashCommand(text);
-		if (!parsed) return false;
-		const builtin = lookupBuiltinSlashCommand(parsed.name);
-		return builtin !== undefined && (builtin.allowArgs === true || !parsed.args);
+		const resolved = resolveBuiltinInvocation(text);
+		return resolved !== undefined && (resolved.command.allowArgs === true || !resolved.parsed.args);
 	}
 
 	/** Whether `text` invokes a registered extension command, which runs locally instead of prompting the model. */
@@ -1709,9 +1755,8 @@ export class InputController {
 			return;
 		}
 		if (text?.startsWith("/")) {
-			const parsed = parseSlashCommand(text);
-			const name = parsed && lookupBuiltinSlashCommand(parsed.name)?.name;
-			if (parsed && name && FOCUSED_VIEW_COMMANDS[name]?.(parsed.args)) {
+			const resolved = resolveBuiltinInvocation(text);
+			if (resolved && FOCUSED_VIEW_COMMANDS[resolved.command.name]?.(resolved.parsed.args)) {
 				// Viewer-scoped commands: /btw asks about the focused transcript, /copy picks
 				// from it, /export writes it (with its own subagents), /jobs lists the focused
 				// agent's jobs without a way to cancel them, /usage reports account-wide limits,
@@ -3075,6 +3120,8 @@ export class InputController {
 	 */
 	#recordSlashCommandUsage(text: string): void {
 		if (!text.startsWith("/")) return;
+		// Hint tokens are prose, not command usage: `/model:x` must not rank `/model`.
+		if (startsWithHintNamespace(text)) return;
 		const token = text.slice(1).split(/\s+/, 1)[0] ?? "";
 		if (!token) return;
 		if (this.#isKnownNonBuiltinSlashCommandToken(token)) {
@@ -3086,18 +3133,145 @@ export class InputController {
 		if (builtin) commandUsage.record(builtin.name);
 	}
 
+	#getAgentCompletionInput() {
+		return {
+			cwd: this.ctx.sessionManager.getCwd(),
+			extensionRoots: this.ctx.session.effectiveExtensionRoots,
+			disabledAgents: cfgTaskDisabledAgents.get(this.ctx.settings),
+			sessionAgents: this.ctx.session.getSessionAgents(),
+		};
+	}
+
+	#localFilesCacheKey(): string {
+		const manager = this.ctx.sessionManager;
+		return `${manager.getCwd()}\0${manager.getSessionId()}\0${manager.getSessionFile() ?? ""}`;
+	}
+
+	async #listLocalFileEntries(): Promise<readonly LocalFileEntry[]> {
+		const key = this.#localFilesCacheKey();
+		if (this.#localFilesCache && this.#localFilesCache.key === key && Date.now() - this.#localFilesCache.at < 2_000) {
+			return this.#localFilesCache.items;
+		}
+		if (this.#localFilesPending) return this.#localFilesPending;
+		const pending = listLocalFiles(sessionLocalProtocolOptions(this.ctx.sessionManager))
+			.then(items => {
+				this.#localFilesCache = { key, items, at: Date.now() };
+				return items;
+			})
+			.finally(() => {
+				if (this.#localFilesPending === pending) this.#localFilesPending = undefined;
+			});
+		this.#localFilesPending = pending;
+		return pending;
+	}
+
+	#getCachedLocalFiles(): readonly LocalFileEntry[] {
+		const key = this.#localFilesCacheKey();
+		const cached = this.#localFilesCache?.key === key ? this.#localFilesCache : undefined;
+		if (!cached || Date.now() - cached.at >= 2_000) {
+			void this.#listLocalFileEntries().catch(() => {});
+		}
+		return cached?.items ?? [];
+	}
+
+	#hintPopupIcon(symbolKey: string): string | undefined {
+		const symbols = currentTheme().symbols;
+		if (symbols.preset === "ascii") return undefined;
+		return symbols.symbol(symbolKey) || undefined;
+	}
+
 	createAutocompleteProvider(commands: SlashCommand[], basePath: string): AutocompleteProvider {
 		void commandUsage.load();
+		// Warm agent and local:// caches so bare-prefix completion and composer chips have fresh hits immediately.
+		if (this.ctx.sessionManager && typeof this.ctx.session?.getSessionAgents === "function") {
+			void listAgentCompletions(this.#getAgentCompletionInput()).catch(() => {});
+			void this.#listLocalFileEntries().catch(() => {});
+		}
+		const modelMentions = createModelMentionSource({
+			source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
+			registry: this.ctx.session.modelRegistry,
+			scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
+		});
+		const toAgentItem = (agent: { name: string; description?: string }): AutocompleteItem => {
+			const icon = this.#hintPopupIcon("icon.agents");
+			return {
+				value: `agent:${agent.name}`,
+				label: `agent:${agent.name}`,
+				...(icon && { icon }),
+				iconName: "agents",
+				...(agent.description && { description: agent.description }),
+			};
+		};
+		const toModelItem = (item: AutocompleteItem): AutocompleteItem => {
+			const icon = this.#hintPopupIcon("icon.model");
+			return {
+				value: `model:${item.value}`,
+				label: `model:${item.label}`,
+				...(icon && { icon }),
+				iconName: "model",
+				...(item.description && { description: item.description }),
+			};
+		};
+		const toLocalItem = (entry: LocalFileEntry): AutocompleteItem => {
+			const icon = this.#hintPopupIcon("icon.extensionContextFile");
+			return {
+				value: `local:${entry.name}`,
+				label: `local:${entry.name}`,
+				...(icon && { icon }),
+				iconName: "file",
+				description: formatBytes(entry.size),
+			};
+		};
+		// Keyed by the gate's own prefixes, so the composer cannot offer a hint the
+		// parser refuses (or miss one it accepts).
+		const namespaceSpecs: Record<(typeof HINT_TOKEN_PREFIXES)[number], Omit<InlineNamespace, "prefix">> = {
+			"/agent:": {
+				barePrefix: true,
+				maxBareMatches: 8,
+				getCompletions: async query => {
+					const agents = await listAgentCompletions(this.#getAgentCompletionInput());
+					const lower = query.toLowerCase();
+					return agents.filter(agent => agent.name.toLowerCase().includes(lower)).map(toAgentItem);
+				},
+				getSyncCompletions: () => {
+					const input = this.#getAgentCompletionInput();
+					const cached = getCachedAgentCompletions(input);
+					if (cached.stale) void listAgentCompletions(input).catch(() => {});
+					return cached.items.map(toAgentItem);
+				},
+			},
+			"/model:": {
+				barePrefix: true,
+				maxBareMatches: 5,
+				getCompletions: query => getModelMentionRows(query, modelMentions).slice(0, 20).map(toModelItem),
+				getSyncCompletions: query => getModelMentionRows(query, modelMentions).slice(0, 20).map(toModelItem),
+			},
+			"/local:": {
+				barePrefix: true,
+				maxBareMatches: 8,
+				getCompletions: async query => {
+					const entries = await this.#listLocalFileEntries();
+					const lower = query.toLowerCase();
+					return entries
+						.filter(entry => entry.name.toLowerCase().includes(lower))
+						.slice(0, 20)
+						.map(toLocalItem);
+				},
+				getSyncCompletions: () => this.#getCachedLocalFiles().map(toLocalItem),
+			},
+		};
+		// Tie-breaking order on equal score: agents > local files > models.
+		const namespaceOrder: readonly (typeof HINT_TOKEN_PREFIXES)[number][] = ["/agent:", "/local:", "/model:"];
 		return createPromptActionAutocompleteProvider({
 			commands,
 			basePath,
 			commandUsage: name => commandUsage.get(name),
 			emojiAutocomplete: () => cfgEmojiAutocomplete.get(this.ctx.settings),
-			modelMentions: createModelMentionSource({
-				source: createModelBrowserSource(this.ctx.settings, model => this.ctx.session.effectiveServiceTier(model)),
-				registry: this.ctx.session.modelRegistry,
-				scopedModels: () => this.ctx.session.scopedModels.map(s => s.model),
-			}),
+			modelMentions,
+			namespaces: namespaceOrder.map(prefix => ({
+				prefix: prefix.slice(1),
+				...namespaceSpecs[prefix],
+			})),
 			// The interactive host uses the default registry; the receiving session can change with focus.
 			internalUrlCaller: () => {
 				const manager = this.ctx.viewSession.sessionManager;

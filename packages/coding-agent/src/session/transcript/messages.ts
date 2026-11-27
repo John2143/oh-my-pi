@@ -68,6 +68,13 @@ export interface BackgroundTanDispatchDetails {
 	sessionFile: string;
 }
 
+/** One skill attached to a multi-skill prompt; `name`/`path`/`lineCount` mirror the top-level fields for the first one. */
+export interface SkillPromptEntry {
+	name: string;
+	path: string;
+	lineCount: number;
+}
+
 export interface SkillPromptDetails {
 	name: string;
 	path: string;
@@ -76,12 +83,20 @@ export interface SkillPromptDetails {
 	 *  token renders as a skill callout, a mid-prompt token as an inline chip in
 	 *  a plain user bubble. Absent on sessions recorded before chips existed. */
 	prompt?: string;
+	/** Every skill attached to this prompt, in invocation order. Absent on
+	 *  messages recorded before a draft could invoke more than one; renderers
+	 *  then fall back to the scalar `name`/`path`/`lineCount`. */
+	skills?: readonly SkillPromptEntry[];
 	lineCount: number;
 	/** Internal: compact label shown for a queued custom message. Optional —
 	 *  non-streaming skill prompts never set it. Stripped from persisted
 	 *  `details` by `SessionManager.appendCustomMessageEntry` via the
 	 *  `INTERNAL_DETAILS_FIELDS` allowlist below. */
 	__queueChipText?: string;
+	/** Internal: hint-expanded user args for a user-invoked skill prompt, used to
+	 *  build per-turn hint/session-agent notices without scanning the `SKILL.md`
+	 *  body. Stripped before persistence via `INTERNAL_DETAILS_FIELDS`. */
+	__expandedUserArgs?: string;
 }
 
 /** Sentinel value for `AssistantMessage.errorMessage` indicating that the abort

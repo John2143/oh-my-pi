@@ -188,13 +188,15 @@ import { SkillDescriptionCatalog } from "../extensibility/skill-descriptions";
 import type { MCPEvalNamespaceCatalog } from "../mcp/eval-namespaces";
 import {
 	type BuiltSkillPromptMessage,
+	type LoadedSkillPrompt,
 	loadSkillPrompt,
-	renderSkillPromptMessage,
+	renderUserSkillPrompts as renderSkillPrompts,
 	type Skill,
 	type SkillPromptInput,
 	type SkillRediscoveryHost,
 	type SkillWarning,
 } from "../extensibility/skills";
+import { expandAgentAndLocalHints, referencedAgentHints } from "../extensibility/skill-tokens";
 import { expandSlashCommand, type FileSlashCommand, loadSlashCommands } from "../extensibility/slash-commands";
 import { normalizeToolEventInput, resolveToolEventInput } from "../extensibility/tool-event-input";
 import { GoalRuntime } from "../goals/runtime";
@@ -206,6 +208,7 @@ import {
 	resolveLocalRoot,
 	sessionLocalProtocolOptions,
 } from "../internal-urls";
+import { validateRelativePath } from "../internal-urls/filesystem-resource";
 import { type ChainJudge, hasNativeJudge, journalJudgmentUsage, resolveJudge, sharedJudgmentCache } from "../judgment";
 import type { IrcMessage } from "../irc/irc-types";
 import type { JobWidgetEntry } from "../tools/details/job-widget";
@@ -226,6 +229,7 @@ import goalTodoContextPrompt from "../prompts/goals/goal-todo-context.md" with {
 import anthropicUsageWrapUpPrompt from "../prompts/system/anthropic-usage-wrap-up.md" with { type: "text" };
 import autoContinuePrompt from "../prompts/system/auto-continue.md" with { type: "text" };
 import checkpointActiveNoticeTemplate from "../prompts/system/checkpoint-active-notice.md" with { type: "text" };
+import hintTokensNoticePrompt from "../prompts/system/hint-tokens-notice.md" with { type: "text" };
 import interruptedThinkingTemplate from "../prompts/system/interrupted-thinking.md" with { type: "text" };
 import manualContinuePrompt from "../prompts/system/manual-continue.md" with { type: "text" };
 import planModeActivePrompt from "../prompts/system/plan-mode-active.md" with { type: "text" };
@@ -478,6 +482,7 @@ import {
 } from "./prewalk";
 import { PROVIDER_REFUSAL_CUSTOM_TYPE, providerRefusalData } from "./provider-refusal";
 import {
+	HINT_TOKENS_NOTICE_TYPE,
 	isAdvisorCard,
 	isDisplayableQueuedMessage,
 	isHiddenUserCompanion,
@@ -618,7 +623,10 @@ import {
 	cfgThemeDark,
 	cfgThemeLight,
 } from "../modes/settings";
+import { getCachedAgentCompletions, getCachedAgentDefinition, listAgentCompletions } from "../task/agent-completions";
+import { getBundledAgent } from "../task/agents";
 import type { PerCallModelAdvertisement } from "../task/model-approval";
+import { isReadOnlyAgent } from "../task/read-only-policy";
 import { cfgTaskBatch, cfgTaskDisabledAgents, perCallModelEnabled } from "../task/settings";
 import {
 	cfgBranchSummaryReserveTokens,
@@ -2452,6 +2460,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			sessionManager: this.sessionManager,
 			modelRegistry: this.#modelRegistry,
 			scopedModels: () => this.scopedModels.map(s => s.model),
+			resolveAgent: name => getCachedAgentDefinition(this.#agentCompletionInput(false), name),
 			inheritedAgents: config.inheritedSessionAgents,
 		});
 		this.#ownedAsyncJobManager = config.ownedAsyncJobManager;
@@ -2996,7 +3005,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		};
 		this.#syncAgentSessionId();
 		this.#todo.syncFromBranch();
-		this.#modelMentions.syncFromBranch();
+		this.#syncModelMentionsFromBranch();
 		this.#goalRuntime = new GoalRuntime({
 			getState: () => this.#goalModeState,
 			setState: state => {
@@ -3217,7 +3226,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			},
 			syncTodoPhasesFromBranch: () => {
 				this.#todo.syncFromBranch();
-				this.#modelMentions.syncFromBranch();
+				this.#syncModelMentionsFromBranch();
 			},
 			resetAdvisorRuntimes: (reason, options) => this.#advisors.resetAllRuntimes(reason, options),
 			rebaseAdvisorPrefix: reason => this.#advisors.rebaseDeliveredPrefixes(reason),
@@ -9384,14 +9393,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 
 		// Expand file-based prompt templates if requested
 		const templated = expandPromptTemplates ? expandPromptTemplate(text, [...this.#promptTemplates]) : text;
-		const expandedText = options?.synthetic ? templated : this.#modelMentions.expandMentions(templated);
+		if (!options?.synthetic) {
+			await this.#warmAgentDiscoveryIfNeeded(templated);
+		}
+		const expandedText = options?.synthetic ? templated : this.#expandUserHints(templated);
 
 		// Magic keywords (see modes/magic-keywords.ts): append hidden system notices after the
 		// user's message that steer this turn. User-authored prompts only — synthetic /
 		// agent-initiated turns never trigger them.
 		const keywordNotices = options?.synthetic ? [] : this.#createMagicKeywordNotices(expandedText);
+		const hintTokensNotice = options?.synthetic ? undefined : this.#createHintTokensNotice(expandedText);
 
-		// A `^` mention in a non-synthetic prompt mints a new alias. The hidden
+		// A `^` or `/model:` mention in a non-synthetic prompt mints a new alias. The hidden
 		// session-agent notice (which tells the model about the alias) must ride
 		// with the message via prependMessages — not as a separate steer — so the
 		// model sees both in the same turn (#14093). A queued prompt announces only
@@ -9401,7 +9414,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			: this.isStreaming
 				? this.#takeQueuedSessionAgentNotice(expandedText, options?.streamingBehavior)
 				: this.#tools.takeSessionAgentNotice();
-		const prependNotices = sessionAgentNotice ? [...keywordNotices, sessionAgentNotice] : keywordNotices;
+		const prependNotices = [
+			...keywordNotices,
+			...(hintTokensNotice ? [hintTokensNotice] : []),
+			...(sessionAgentNotice ? [sessionAgentNotice] : []),
+		];
 
 		// Agent-initiated synthetic prompts (auto-continue, plan, reminders) are not user turns.
 		if (options?.userInitiated ?? !options?.synthetic) this.#noteUserTurn();
@@ -9548,15 +9565,18 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		let turnError: unknown;
 		let dispatched = false;
 		const refusalBeforeDispatch = this.#costCapRefusal;
+		const idlePrependMessages = [
+			...preludeMessages,
+			...keywordNotices,
+			...(hintTokensNotice ? [hintTokensNotice] : []),
+			...attachmentSourceNotices,
+		];
 		try {
 			dispatched = await this.#promptWithMessage(message, expandedText, {
 				...options,
 				followUpBatch: followUps,
 				images: normalizedImages,
-				prependMessages:
-					preludeMessages.length > 0 || keywordNotices.length > 0 || attachmentSourceNotices.length > 0
-						? [...preludeMessages, ...keywordNotices, ...attachmentSourceNotices]
-						: undefined,
+				prependMessages: idlePrependMessages.length > 0 ? idlePrependMessages : undefined,
 			});
 		} catch (error) {
 			turnError = error;
@@ -9680,6 +9700,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 						.join("");
 
 		let keywordNotices: CustomMessage[] = [];
+		let hintTokensNotice: CustomMessage | undefined;
 		// Queued deliveries bypass the idle-turn notice injection, so a queued user
 		// skill prompt carries the session-agent notice itself, like a queued typed
 		// prompt (#14093).
@@ -9687,15 +9708,26 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		if (message.customType === SKILL_PROMPT_MESSAGE_TYPE && message.attribution === "user") {
 			const details = message.details;
 			let skillArgs = "";
-			if (details && typeof details === "object" && "args" in details && typeof details.args === "string") {
-				skillArgs = details.args;
+			let expandedSkillArgs = "";
+			if (details && typeof details === "object") {
+				if ("args" in details && typeof details.args === "string") {
+					skillArgs = details.args;
+				}
+				if ("__expandedUserArgs" in details && typeof details.__expandedUserArgs === "string") {
+					expandedSkillArgs = details.__expandedUserArgs;
+				}
 			}
 			keywordNotices = this.#createMagicKeywordNotices(skillArgs);
+			hintTokensNotice = expandedSkillArgs ? this.#createHintTokensNotice(expandedSkillArgs) : undefined;
 			const sessionAgentNotice =
 				options?.queueOnly || this.isStreaming
-					? this.#takeQueuedSessionAgentNotice(textContent, options?.streamingBehavior)
+					? this.#takeQueuedSessionAgentNotice(expandedSkillArgs || textContent, options?.streamingBehavior)
 					: this.#tools.takeSessionAgentNotice();
-			queuedNotices = sessionAgentNotice ? [...keywordNotices, sessionAgentNotice] : keywordNotices;
+			queuedNotices = [
+				...keywordNotices,
+				...(hintTokensNotice ? [hintTokensNotice] : []),
+				...(sessionAgentNotice ? [sessionAgentNotice] : []),
+			];
 		}
 
 		if (options?.queueOnly || this.isStreaming) {
@@ -9766,10 +9798,11 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			outcome.sessionClaimed = true;
 			return true;
 		}
+		const idleSkillNotices = [...keywordNotices, ...(hintTokensNotice ? [hintTokensNotice] : [])];
 		outcome.sessionClaimed = await this.#promptWithMessage(preparedMessage, textContent, {
 			...options,
 			followUpBatch: followUps,
-			prependMessages: keywordNotices.length > 0 ? keywordNotices : undefined,
+			prependMessages: idleSkillNotices.length > 0 ? idleSkillNotices : undefined,
 		});
 		if (!outcome.sessionClaimed) this.#reportDroppedCustomPrompt(message, options, followUps);
 		return outcome.sessionClaimed;
@@ -10526,10 +10559,130 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		});
 	}
 
+	#agentCompletionInput(includeSessionAgents = true) {
+		return {
+			cwd: this.sessionManager.getCwd(),
+			extensionRoots: this.effectiveExtensionRoots,
+			disabledAgents: cfgTaskDisabledAgents.get(this.settings),
+			sessionAgents: includeSessionAgents ? this.getSessionAgents() : [],
+		};
+	}
+
+	async #warmAgentDiscoveryIfNeeded(text?: string): Promise<void> {
+		const needsCustomBase = this.#modelMentions.mentions.some(
+			mention => mention.baseAgent !== undefined && !getBundledAgent(mention.baseAgent),
+		);
+		if (!needsCustomBase && !text?.includes("/agent:")) return;
+		const input = this.#agentCompletionInput(false);
+		if (!getCachedAgentCompletions(input).stale) return;
+		try {
+			await listAgentCompletions(input);
+		} catch {
+			// Best-effort cache warm; bundled agents remain available synchronously.
+		}
+	}
+
+	#syncModelMentionsFromBranch(): void {
+		this.#modelMentions.syncFromBranch();
+		if (
+			this.#modelMentions.mentions.some(
+				mention => mention.baseAgent !== undefined && !getBundledAgent(mention.baseAgent),
+			)
+		) {
+			const input = this.#agentCompletionInput(false);
+			if (getCachedAgentCompletions(input).stale) {
+				void listAgentCompletions(input).catch(() => {});
+			}
+		}
+	}
+
+	#expandUserHints(text: string): string {
+		const afterModels = this.#modelMentions.expandMentions(text);
+		const input = this.#agentCompletionInput(true);
+		return expandAgentAndLocalHints(afterModels, {
+			isKnownAgent: name => getCachedAgentDefinition(input, name) !== undefined,
+			formatLocalUrl: relativePath => {
+				try {
+					validateRelativePath(relativePath, "local");
+					return `local://${relativePath}`;
+				} catch {
+					return undefined;
+				}
+			},
+		});
+	}
+
+	#createHintTokensNotice(expandedText: string): CustomMessage | undefined {
+		const agentNames = referencedAgentHints(expandedText);
+		const modelAgentIds = [...referencedModelAgents(expandedText)];
+		if (agentNames.length === 0 && modelAgentIds.length === 0) return undefined;
+
+		const mentionsByAgent = new Map(this.#modelMentions.mentions.map(mention => [mention.agent, mention]));
+		const referencedMentions = modelAgentIds
+			.map(id => mentionsByAgent.get(id))
+			.filter((mention): mention is ModelMention => mention !== undefined);
+		const hasSpecialistMention = referencedMentions.some(mention => mention.baseAgent !== undefined);
+		// Plain `^selector` / `/model:` without `/agent:` already rides `session-agent-notice`;
+		// emit `hint-tokens-notice` whenever `/agent:` or a specialist-cloned model is present.
+		if (agentNames.length === 0 && !hasSpecialistMention) return undefined;
+
+		const input = this.#agentCompletionInput(true);
+		const coveredModels = new Set<string>();
+		const agents: {
+			name: string;
+			description: string;
+			readOnly: boolean;
+			blocking: boolean;
+			structured: boolean;
+			callAgent: string;
+			pinnedModel?: string;
+			effort?: string;
+		}[] = [];
+
+		for (const name of agentNames) {
+			const def = getCachedAgentDefinition(input, name);
+			if (!def) continue;
+			const paired = referencedMentions.filter(mention => (mention.baseAgent ?? "task") === name);
+			const singlePair = paired.length === 1 ? paired[0] : undefined;
+			if (singlePair) coveredModels.add(singlePair.agent);
+			agents.push({
+				name: def.name,
+				description: def.description,
+				readOnly: isReadOnlyAgent(def),
+				blocking: def.blocking === true,
+				structured: def.structured === true,
+				callAgent: singlePair ? singlePair.agent : def.name,
+				...(singlePair ? { pinnedModel: singlePair.selector } : {}),
+				...(singlePair?.thinkingLevel ? { effort: singlePair.thinkingLevel } : {}),
+			});
+		}
+
+		const models = referencedMentions
+			.filter(mention => !coveredModels.has(mention.agent))
+			.map(mention => ({
+				agent: mention.agent,
+				name: mention.name,
+				selector: mention.selector,
+				baseAgent: mention.baseAgent,
+				effort: mention.thinkingLevel,
+			}));
+
+		if (agents.length === 0 && models.length === 0) return undefined;
+
+		return {
+			role: "custom",
+			customType: HINT_TOKENS_NOTICE_TYPE,
+			content: prompt.render(hintTokensNoticePrompt, { agents, models }).trim(),
+			attribution: "agent",
+			display: false,
+			timestamp: Date.now(),
+		};
+	}
+
 	/**
-	 * Expand `^model` mentions in a user-authored queued message and take the
-	 * session-agent notice to ride with it, as #dispatchPrompt does for a typed
-	 * prompt (#14093). Agent-attributed messages pass through: a mention is the user's tag.
+	 * Expand `^model` and `/model:`/`/agent:`/`/local:` hints in a user-authored queued message
+	 * and take the hint/session-agent notices to ride with it, as #dispatchPrompt does for a
+	 * typed prompt (#14093). Agent-attributed messages pass through: hints are the user's tags.
 	 */
 	#expandQueuedMentions(
 		text: string,
@@ -10537,9 +10690,13 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		attribution: MessageAttribution = "user",
 	): { text: string; prependMessages: CustomMessage[] } {
 		if (attribution !== "user") return { text, prependMessages: [] };
-		const expandedText = this.#modelMentions.expandMentions(text);
+		const expandedText = this.#expandUserHints(text);
+		const hintTokensNotice = this.#createHintTokensNotice(expandedText);
 		const sessionAgentNotice = this.#takeQueuedSessionAgentNotice(expandedText, mode);
-		return { text: expandedText, prependMessages: sessionAgentNotice ? [sessionAgentNotice] : [] };
+		const prependMessages: CustomMessage[] = [];
+		if (hintTokensNotice) prependMessages.push(hintTokensNotice);
+		if (sessionAgentNotice) prependMessages.push(sessionAgentNotice);
+		return { text: expandedText, prependMessages };
 	}
 
 	/**
@@ -12060,25 +12217,25 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 	}
 
 	/**
-	 * Load a user-invoked skill and authorize model tags in its arguments. A stale skill (its plugin
+	 * Load the user-invoked skills and authorize model tags in the draft. A stale skill (its plugin
 	 * install was replaced or deleted) is read from this session's rediscovered same-named skill.
+	 * Any load failure rejects before a message is sent.
 	 */
-	async buildUserSkillPrompt(
-		skill: Pick<Skill, "name" | "filePath" | "baseDir">,
+	async buildUserSkillPrompts(
+		skills: readonly Pick<Skill, "name" | "filePath" | "baseDir">[],
 		input: SkillPromptInput,
 	): Promise<BuiltSkillPromptMessage> {
-		const loaded = await loadSkillPrompt(skill, this);
-		return this.renderUserSkillPrompt(loaded.skill, input, loaded.body);
+		const [loaded] = await Promise.all([
+			Promise.all(skills.map(skill => loadSkillPrompt(skill, this))),
+			this.#warmAgentDiscoveryIfNeeded(input.prompt ?? input.args),
+		]);
+		return this.renderUserSkillPrompts(loaded, input);
 	}
 
-	/** Render an already-loaded skill only after the invoking submission is still current. */
-	renderUserSkillPrompt(
-		skill: Pick<Skill, "name" | "filePath" | "baseDir">,
-		input: SkillPromptInput,
-		body: string,
-	): BuiltSkillPromptMessage {
-		return renderSkillPromptMessage(skill, input, body, "user", {
-			expandUserArgs: args => this.#modelMentions.expandMentions(args),
+	/** Render already-loaded skills only after the invoking submission is still current. */
+	renderUserSkillPrompts(loaded: readonly LoadedSkillPrompt[], input: SkillPromptInput): BuiltSkillPromptMessage {
+		return renderSkillPrompts(loaded, input, {
+			expandUserArgs: args => this.#expandUserHints(args),
 		});
 	}
 
@@ -13835,7 +13992,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.replaceMessagesFromSessionContext(activeMessages ?? sessionContext.messages);
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
-		this.#modelMentions.syncFromBranch();
+		this.#syncModelMentionsFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 		this.#checkpointState = undefined;
 		this.#pendingRewindReport = undefined;
@@ -14934,7 +15091,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#reseedTokenRate();
 			this.#advisors.resetSessionState({ preserveCost: true });
 			this.#todo.syncFromBranch();
-			this.#modelMentions.syncFromBranch();
+			this.#syncModelMentionsFromBranch();
 			if (switchingToDifferentSession) {
 				this.#closeAllProviderSessions("session switch");
 			} else if (didReloadConversationChange) {
@@ -15111,7 +15268,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 				this.#emit({ type: "model_changed" });
 			}
 			this.#todo.syncFromBranch();
-			this.#modelMentions.syncFromBranch();
+			this.#syncModelMentionsFromBranch();
 			this.#advisors.resetAllRuntimes();
 			this.#advisors.reattachRecorderFeeds();
 			this.#reconnectToAgent();
@@ -15297,7 +15454,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			this.#clearSessionScopedToolState();
 			this.#rehydrateCheckpointRewindState();
 			this.#todo.syncFromBranch();
-			this.#modelMentions.syncFromBranch();
+			this.#syncModelMentionsFromBranch();
 			this.#freshProviderSessionId = undefined;
 			this.#clearInheritedProviderPromptCacheKey();
 			this.#syncAgentSessionId();
@@ -15430,7 +15587,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 			});
 			this.sessionManager.appendMessage(sanitizeAssistantForReparentedHistory(assistantMessage));
 			this.#todo.syncFromBranch();
-			this.#modelMentions.syncFromBranch();
+			this.#syncModelMentionsFromBranch();
 			this.#freshProviderSessionId = undefined;
 			this.#syncAgentSessionId();
 			this.#memory.rekeyForCurrentSessionId();
@@ -15794,7 +15951,7 @@ export class AgentSession implements SettingsScope, AgentViewSession {
 		this.#rehydrateCheckpointRewindState();
 		this.#advisors.resetSessionState({ preserveCost: true });
 		this.#todo.syncFromBranch();
-		this.#modelMentions.syncFromBranch();
+		this.#syncModelMentionsFromBranch();
 		this.#closeCodexProviderSessionsForHistoryRewrite();
 
 		this.#branchSummaryAbortController = undefined;

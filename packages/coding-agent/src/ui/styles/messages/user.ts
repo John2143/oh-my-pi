@@ -21,6 +21,7 @@ import { truncate, visibleWidth } from "@oh-my-pi/pi-tui/text/width";
 import type { Theme } from "@oh-my-pi/pi-tui/theme/contract";
 import { fgSgr } from "@oh-my-pi/pi-tui/theme/color";
 import type { TspCardProps } from "@oh-my-pi/pi-wire";
+import { maskNonProse } from "../../../modes/view-model/prompt/markdown-prose";
 import { type GlowingKeyword, MAGIC_KEYWORD_PERIOD_MS, magicKeywordLetters } from "../../composer/magic-keywords";
 import type { TermChip } from "../../transcript/messages/chips";
 import { fileLink } from "../tools/file-common";
@@ -48,16 +49,44 @@ interface PromptTerm {
 
 /** `text` with each chip label drawn in its color (bold), linked to its file when `hyperlinks`. */
 function colorChips(theme: Theme, text: string, chips: readonly TermChip[], hyperlinks: boolean): string {
-	let out = text;
-	for (const chip of chips) {
+	if (chips.length === 0) return text;
+	const masked = maskNonProse(text);
+	const sorted = [...chips].sort((a, b) => b.t.length - a.t.length);
+	const styledMap = new Map<TermChip, string>();
+	for (const chip of sorted) {
 		const styled = chip.color.startsWith("#")
 			? hexFg(chip.color, `\x1b[1m${chip.t}\x1b[22m`)
 			: chip.pill
 				? theme.bg("customMessageBg", theme.style(chip.color, chip.t))
 				: theme.style(chip.color, chip.t);
-		out = out.split(chip.t).join(fileLink({ hyperlinks }, styled, chip.link?.path, chip.link?.line));
+		styledMap.set(chip, fileLink({ hyperlinks }, styled, chip.link?.path, chip.link?.line));
 	}
-	return out;
+	const spans: { from: number; to: number; replacement: string }[] = [];
+	let cursor = 0;
+	while (cursor < masked.length) {
+		let matched: { chip: TermChip; at: number } | undefined;
+		for (const chip of sorted) {
+			if (!chip.t) continue;
+			const at = masked.indexOf(chip.t, cursor);
+			if (at === -1) continue;
+			if (!matched || at < matched.at) matched = { chip, at };
+		}
+		if (!matched) break;
+		spans.push({
+			from: matched.at,
+			to: matched.at + matched.chip.t.length,
+			replacement: styledMap.get(matched.chip)!,
+		});
+		cursor = matched.at + matched.chip.t.length;
+	}
+	if (spans.length === 0) return text;
+	let out = "";
+	let at = 0;
+	for (const span of spans) {
+		out += text.slice(at, span.from) + span.replacement;
+		at = span.to;
+	}
+	return out + text.slice(at);
 }
 
 /** Prompt Markdown as a user bubble draws it (unfilled): bubble prose color, chips in their colors. */

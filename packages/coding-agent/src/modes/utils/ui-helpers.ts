@@ -34,8 +34,7 @@ import {
 	resolveAssistantErrorPresentation,
 	splitAssistantMessageToolTimeline,
 } from "../../session/transcript/transcript-render-helpers";
-import { executeBuiltinSlashCommand, lookupBuiltinSlashCommand } from "../../slash-commands/builtin-registry";
-import { parseSlashCommand } from "../../slash-commands/helpers/parse";
+import { executeBuiltinSlashCommand, resolveBuiltinInvocation } from "../../slash-commands/builtin-registry";
 import type { Shell, TranscriptBlock } from "../../ui/shell";
 import { NoticeLine, StatusNotice, StrippedToolCalls } from "../../ui/transcript/messages/notices";
 import { ToolActivity } from "../../ui/transcript/messages/panel";
@@ -1148,9 +1147,8 @@ export class UiHelpers {
 
 	isKnownSlashCommand(text: string): boolean {
 		if (!text.startsWith("/")) return false;
-		const parsed = parseSlashCommand(text);
-		const builtin = parsed && lookupBuiltinSlashCommand(parsed.name);
-		if (builtin && (builtin.allowArgs || !parsed.args)) return true;
+		const resolved = resolveBuiltinInvocation(text);
+		if (resolved && (resolved.command.allowArgs || !resolved.parsed.args)) return true;
 		const spaceIndex = text.indexOf(" ");
 		const commandName = spaceIndex === -1 ? text.slice(1) : text.slice(1, spaceIndex);
 		if (!commandName) return false;

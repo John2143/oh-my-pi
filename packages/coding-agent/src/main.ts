@@ -445,7 +445,7 @@ export async function submitInteractiveInput(
 		| "restoreDroppedPrompt"
 	> &
 		Partial<Pick<InteractiveMode, "loopPrompt" | "pauseLoop">>,
-	session: Pick<AgentSession, "buildUserSkillPrompt" | "prompt" | "promptCustomMessage" | "resume" | "isStreaming">,
+	session: Pick<AgentSession, "buildUserSkillPrompts" | "prompt" | "promptCustomMessage" | "resume" | "isStreaming">,
 	input: SubmittedUserInput,
 ): Promise<void> {
 	if (input.cancelled) {

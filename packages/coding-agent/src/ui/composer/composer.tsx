@@ -1283,13 +1283,16 @@ export class Composer {
 		};
 
 		try {
-			const commandName = inSubmittedSlashContext(before, lines, line) && !before.trimStart().includes(" ");
+			const isHintToken = provider.isNamespaceToken?.(before) === true;
+			const commandName =
+				!isHintToken && inSubmittedSlashContext(before, lines, line) && !before.trimStart().includes(" ");
 			// A second Tab on an @ token with no selectable row must be able to start
 			// the immediate directory listing even if a slow fuzzy walk is still running.
 			const regular =
 				!force &&
 				(!explicitTab ||
-					((commandName || extractAtFilePrefix(before) === null) && inCompletionContext(before, lines, line)));
+					((commandName || isHintToken || extractAtFilePrefix(before) === null) &&
+						(isHintToken || inCompletionContext(before, lines, line))));
 			this.#forceFiles = !regular;
 			if (regular && commandName && provider.trySyncSlashCompletion) {
 				const result = provider.trySyncSlashCompletion(before);
@@ -1323,7 +1326,13 @@ export class Composer {
 			if (regular) {
 				const result = await suggest();
 				if (!current()) return;
-				if (result?.items.length || !explicitTab || commandName || !provider.getForceFileSuggestions) {
+				if (
+					result?.items.length ||
+					!explicitTab ||
+					commandName ||
+					isHintToken ||
+					!provider.getForceFileSuggestions
+				) {
 					show(result);
 					return;
 				}
@@ -1375,8 +1384,10 @@ export class Composer {
 		const { lines, line, col, before } = this.#position();
 		const enter = via === "enter";
 		const slash = inSubmittedSlashContext(before, lines, line);
+		const isHint = provider.isNamespaceValue?.(value) === true;
 		const name =
 			slash &&
+			!isHint &&
 			open.prefix.trimStart().startsWith("/") &&
 			!/\s/.test(before.trimStart()) &&
 			!value.startsWith("/") &&
@@ -1390,7 +1401,9 @@ export class Composer {
 		// A pending refresh can leave old rows on screen. Never apply one to different text.
 		if (open.revision !== this.#revision || (enter && ((!open.chosen && item.descriptionMatch) || typedArg))) {
 			this.#closeCompletion();
-			if (enter) this.submit();
+			// A hint token is prose in a draft the user is still editing: Enter
+			// closes the popup instead of submitting a half-typed namespace.
+			if (enter && !provider.isNamespaceToken?.(before)) this.submit();
 			return;
 		}
 		const run = enter && name && value !== SKILL_NAMESPACE && this.#cursor() === this.#text().length;
@@ -1447,7 +1460,8 @@ export class Composer {
 			}
 		}
 		if (force && at.before && !/\s$/.test(at.before)) void this.#complete(false, at, true);
-		else if (inCompletionContext(at.before, at.lines, at.line)) void this.#complete(false, at);
+		else if (provider.isNamespaceToken?.(at.before) || inCompletionContext(at.before, at.lines, at.line))
+			void this.#complete(false, at);
 	}
 
 	// ─── Input ──────────────────────────────────────────────────────────────

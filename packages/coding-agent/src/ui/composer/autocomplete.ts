@@ -60,6 +60,9 @@ export interface AutocompleteProvider extends Pick<
 	| "trySyncSlashCompletion"
 	| "trySyncModelMentionCompletion"
 	| "trySyncInlineReplace"
+	| "isNamespaceToken"
+	| "isNamespaceValue"
+	| "matchesNamespaceQuery"
 	| "getForceFileSuggestions"
 	| "shouldTriggerFileCompletion"
 > {
